@@ -80,9 +80,10 @@ multiplying mass. On the index it is second lowest of all 84 taxa, above only
 ## Scripts
 
 Done and tested: `01` to `13` (carried over), `14`, `15`, `16`, `17`, `22`.
+Written, first full run in progress: `23_mrpmm`.
 
 To write: `18_hyphaeon_prep`, `19_hyphaeon_run.sh`, `20_hyphaeon_collect`, `21_gsea`,
-`23_mrpmm`, `24_figures`. Each is specified in `PLAN_next_submission.md`.
+`24_figures`. Each is specified in `PLAN_next_submission.md`.
 
 `20_hyphaeon_collect` must also correlate the per-gene HyphAeon statistic against
 `aitchison_variance_results.csv`. That file is a per-gene measure of base-composition
@@ -160,8 +161,9 @@ cannot be run here.
 
 ## Open questions, blocking
 
-1. **Does `hyphaeon phenotype` need a phenotype for every tip, or only the focal taxa?**
-   Decides how `18_hyphaeon_prep` prunes. Unanswerable from the preprint; check the CLI.
+1. **What are the input and output formats of `hyphaeon phenotype`?** Needed to write the
+   writer in script 18 and the parser in script 20. HyphAeon 0.2.0 is on PyPI, so a `pip
+   install hyphaeon` and `hyphaeon phenotype --help` settles this and the two below.
 2. **Is the HyphAeon per-gene statistic a rate association, as in RERconverge, or a
    diversifying-selection test, as in MEME?** The preprint names PARS as a pillar and gives
    no methods for it. This matters: the user's reading of a genome-wide excess as relaxed
@@ -170,11 +172,16 @@ cannot be run here.
 3. Runtime and batching for roughly 44,000 gene analyses (3 phenotypes x ~14,800 genes).
 4. Gene trees or the dated species tree per gene analysis.
 
-**Hard blocker before `19_hyphaeon_run`:** ancient-DNA damage control for the great auk.
-Cytosine deamination produces C-to-T and G-to-A miscalls that bias dN and dS directly, and
-*Pinguinus* is in the codon-level analyses. Requested by NEE Reviewer 1 and NatComms
-Reviewer 3 and never delivered. mapDamage plots, fragment length distributions and
-contamination estimates.
+**Great auk damage control: partly already done.** `Submission_NatComms/figS1` IS the
+mapDamage output. It shows base composition at read ends, misincorporation frequencies by
+position, read-length distributions (mode near 45 bp) and cumulative C-to-T and G-to-A
+curves. Damage is low, roughly 0.02 to 0.04 at the termini. It was added for the Nature
+Communications submission after NEE Reviewer 1 asked for it.
+
+What is still missing is contamination inference and, more importantly, a quantification
+of how the residual deamination shifts dN, dS and omega for *Pinguinus* specifically.
+That sensitivity check should run before *Pinguinus* is trusted in any codon-level result,
+but it no longer blocks starting script 19.
 
 ## Next action
 

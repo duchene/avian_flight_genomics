@@ -1,0 +1,224 @@
+# 23_mrpmm.Rscript
+#
+# Multi-response phylogenetic mixed model across the 84-taxon phylogeny.
+#
+# Replaces the frequentist and Bayesian path analyses of the previous version. Those
+# fitted a directed chain chosen in advance and compared seven such chains. An MR-PMM
+# instead estimates the full covariance among the traits and splits it into a part that
+# follows the phylogeny and a part that does not, which is the question the path analysis
+# was reaching for. Following Halliwell, Holland and Yates (2025).
+#
+# RESPONSES. Six, all per taxon: ln dN, ln dS, ln genome length, ln gene count, the
+# flight index, and mean GC.
+#
+# Omega is deliberately NOT a seventh response. ln(omega) = ln(dN) - ln(dS) to within the
+# difference between a median of ratios and a ratio of medians, so including it would make
+# the response covariance near-singular. It is recovered afterwards from the posterior as
+# the difference between the dN and dS effects, which is exact in the model's own terms.
+#
+# FIXED EFFECTS. BUSCO completeness only. Assembly quality is a nuisance that does not
+# evolve on the tree, so it belongs here and not among the responses, which is the point
+# NEE Reviewer 1 raised. Body mass is NOT a fixed effect because it is inside the flight
+# index, which is a response; including both would be close to circular.
+#
+# Requires: brms, ape
+# In:  ../output/traits_per_taxon.csv, ../data/dnds_branches.Rdata,
+#      ../data/dated.auk.tre, ../data/Feng_Table_1.csv
+# Out: ../output/mrpmm_fit.Rdata, ../output/mrpmm_correlations.csv,
+#      ../figures/Fig3_mrpmm.pdf
+
+library(brms)
+library(ape)
+
+CHAINS <- 4
+ITER   <- 4000
+WARMUP <- 2000
+ADAPT  <- 0.95
+SEED   <- 42
+# Set QUICK to TRUE for a compile-and-run check rather than a production fit.
+QUICK  <- as.logical(Sys.getenv("MRPMM_QUICK", "FALSE"))
+if (QUICK) { CHAINS <- 2; ITER <- 400; WARMUP <- 200 }
+
+dir.create("../output", showWarnings = FALSE)
+dir.create("../figures", showWarnings = FALSE)
+
+tr  <- read.csv("../output/traits_per_taxon.csv", stringsAsFactors = FALSE)
+phy <- read.tree("../data/dated.auk.tre")
+load("../data/dnds_branches.Rdata")
+
+
+# ---- 1. Per-taxon molecular rates ----
+#
+# dnres, dsres and dndsres are loci by taxa matrices of terminal-branch rates. The median
+# across loci is the taxon's genome-wide rate.
+
+rate_of <- function(m) {
+  v <- apply(m[, tr$code, drop = FALSE], 2, median, na.rm = TRUE)
+  log(v)
+}
+tr$ln_dn <- rate_of(dnres)
+tr$ln_ds <- rate_of(dsres)
+cat("per-taxon rates from", nrow(dnres), "loci; median loci per taxon:",
+    median(colSums(!is.na(dsres[, tr$code]))), "\n")
+
+
+# ---- 2. Per-taxon genome architecture and assembly quality ----
+
+f <- read.csv("../data/Feng_Table_1.csv", check.names = FALSE, stringsAsFactors = FALSE)
+f$tip <- gsub(" ", "_", f[["Latin name"]])
+f$tip[f$tip == "Nannopterum_harrisi"] <- "Phalacrocorax_harrisi"
+# a few tips differ only in the generic name; fall back to the specific epithet
+idx <- match(tr$tip, f$tip)
+miss <- which(is.na(idx))
+for (i in miss) {
+  ep <- sub("^[^_]+_", "", tr$tip[i])
+  cand <- which(sub("^[^_]+_", "", f$tip) == ep)
+  if (length(cand) == 1) idx[i] <- cand
+}
+g <- f[idx, ]
+
+num <- function(x) as.numeric(gsub(",", "", x))
+tr$ln_len   <- log(num(g[["Total_Len (bp)"]]))
+tr$ln_genes <- log(num(g[["Number of total gene"]]))
+tr$busco    <- num(g[["Complete BUSCOs (C, %)"]])
+
+cat("taxa with no assembly record:",
+    paste(tr$tip[is.na(tr$ln_len)], collapse = ", "), "\n")
+
+
+# ---- 3. Model frame ----
+
+vars <- c("ln_dn", "ln_ds", "ln_len", "ln_genes", "loading_index", "gc_mean")
+if (all(is.na(tr$gc_var))) {
+  message("gc_var is empty (alignments absent), so it is not a response. ",
+          "Rerun script 14 with ../data/postshrink_alignments/ present to include it.")
+} else {
+  vars <- c(vars, "gc_var")
+}
+
+dd <- tr[, c("tip", "code", "species", "ability", "style", vars, "busco")]
+dd <- dd[complete.cases(dd[, c(vars, "busco")]), ]
+dropped <- setdiff(tr$tip, dd$tip)
+cat("taxa in the model:", nrow(dd), "of 84\n")
+if (length(dropped)) cat("dropped for missing data:", paste(dropped, collapse = ", "), "\n")
+
+# Standardise so that the covariance matrices are correlations and the priors are sane.
+for (v in vars) dd[[v]] <- as.numeric(scale(dd[[v]]))
+dd$busco <- as.numeric(scale(dd$busco))
+
+phy <- drop.tip(phy, setdiff(phy$tip.label, dd$tip))
+A <- vcv.phylo(phy, corr = TRUE)
+dd <- dd[match(rownames(A), dd$tip), ]
+dd$phylo <- dd$tip
+stopifnot(identical(dd$phylo, rownames(A)))
+
+
+# ---- 4. Fit ----
+#
+# The shared |p| term makes the phylogenetic random effects correlated across responses,
+# giving the phylogenetic covariance matrix. set_rescor(TRUE) gives the residual
+# covariance. The split between the two is the whole point of the method.
+
+bf_list <- lapply(vars, function(v) {
+  bf(as.formula(paste0(v, " ~ busco + (1|p|gr(phylo, cov = A))")))
+})
+form <- Reduce(`+`, bf_list) + set_rescor(TRUE)
+
+# In a multivariate model every population-level prior is response-specific, so they are
+# built per response rather than declared once. lkj(2) on both correlation matrices mildly
+# shrinks towards independence, which is the conservative choice here.
+resp_nm <- gsub("[^A-Za-z0-9]", "", vars)
+pr <- c(
+  do.call(c, lapply(resp_nm, function(r) prior_string("normal(0, 1)", class = "b", resp = r))),
+  do.call(c, lapply(resp_nm, function(r) prior_string("student_t(3, 0, 2)", class = "sd", resp = r))),
+  prior(lkj(2), class = "cor"),
+  prior(lkj(2), class = "rescor"))
+
+cat("\nfitting", length(vars), "responses on", nrow(dd), "taxa",
+    if (QUICK) "(QUICK mode)" else "", "\n")
+fit <- brm(form, data = dd, data2 = list(A = A), prior = pr,
+           chains = CHAINS, iter = ITER, warmup = WARMUP, seed = SEED,
+           control = list(adapt_delta = ADAPT, max_treedepth = 12),
+           cores = min(CHAINS, parallel::detectCores()))
+
+save(fit, dd, A, vars, file = "../output/mrpmm_fit.Rdata")
+
+
+# ---- 5. Convergence ----
+
+rh <- brms::rhat(fit); es <- brms::neff_ratio(fit)
+cat("\nmax Rhat:", round(max(rh, na.rm = TRUE), 4),
+    " min ESS ratio:", round(min(es, na.rm = TRUE), 3),
+    " divergences:", sum(subset(nuts_params(fit), Parameter == "divergent__")$Value), "\n")
+
+
+# ---- 6. Phylogenetic and residual correlations ----
+
+dr <- as_draws_df(fit)
+nm <- gsub("[^A-Za-z0-9]", "", vars)
+
+grab <- function(pattern) {
+  cl <- grep(pattern, names(dr), value = TRUE)
+  if (!length(cl)) return(NULL)
+  do.call(rbind, lapply(cl, function(c0) {
+    v <- dr[[c0]]
+    data.frame(term = c0, mean = mean(v),
+               lwr = unname(quantile(v, .025)), upr = unname(quantile(v, .975)),
+               p_dir = max(mean(v > 0), mean(v < 0)), row.names = NULL)
+  }))
+}
+phy_cor <- grab("^cor_phylo__")
+res_cor <- grab("^rescor__")
+cors <- rbind(cbind(level = "phylogenetic", phy_cor), cbind(level = "residual", res_cor))
+cors$credible <- cors$lwr > 0 | cors$upr < 0
+write.csv(cors, "../output/mrpmm_correlations.csv", row.names = FALSE)
+
+cat("\nCredible correlations (95% interval excluding zero):\n\n")
+cr <- cors[cors$credible, c("level", "term", "mean", "lwr", "upr")]
+if (nrow(cr)) print(format(cr, digits = 2), row.names = FALSE) else cat("  none\n")
+
+
+# ---- 7. Omega, recovered from the posterior ----
+#
+# ln(omega) = ln(dN) - ln(dS), so the omega effect of any predictor is the difference of
+# its dN and dS effects, taken draw by draw so that the uncertainty is correct.
+
+b_dn <- dr[["b_lndn_busco"]]; b_ds <- dr[["b_lnds_busco"]]
+if (!is.null(b_dn) && !is.null(b_ds)) {
+  w <- b_dn - b_ds
+  cat(sprintf("\nBUSCO effect on ln(omega), derived: %.3f [%.3f, %.3f], P(dir) = %.2f\n",
+              mean(w), quantile(w, .025), quantile(w, .975),
+              max(mean(w > 0), mean(w < 0))))
+}
+
+
+# ---- 8. Figure ----
+
+cor_matrix <- function(prefix) {
+  M <- diag(length(vars)); dimnames(M) <- list(nm, nm)
+  for (i in seq_along(nm)) for (j in seq_along(nm)) {
+    if (i >= j) next
+    cl <- grep(paste0("^", prefix, ".*", nm[i], ".*", nm[j]), names(dr), value = TRUE)
+    if (length(cl) == 1) M[i, j] <- M[j, i] <- mean(dr[[cl]])
+  }
+  M
+}
+Mp <- cor_matrix("cor_phylo__"); Mr <- cor_matrix("rescor__")
+
+pdf("../figures/Fig3_mrpmm.pdf", width = 11, height = 5.4)
+par(mfrow = c(1, 2), mar = c(7.5, 7.5, 3, 2))
+ramp <- colorRampPalette(c("#2B6B8F", "white", "#C4622D"))(101)
+show_mat <- function(M, main) {
+  image(seq_along(nm), seq_along(nm), t(M[rev(seq_along(nm)), ]), zlim = c(-1, 1),
+        col = ramp, axes = FALSE, xlab = "", ylab = "", main = main, font.main = 1)
+  axis(1, at = seq_along(nm), labels = nm, las = 2, cex.axis = 0.8, tick = FALSE)
+  axis(2, at = seq_along(nm), labels = rev(nm), las = 2, cex.axis = 0.8, tick = FALSE)
+  for (i in seq_along(nm)) for (j in seq_along(nm))
+    text(j, length(nm) - i + 1, sprintf("%.2f", M[i, j]), cex = 0.7,
+         col = ifelse(abs(M[i, j]) > 0.6, "white", "grey20"))
+  box(col = "grey50")
+}
+show_mat(Mp, "Phylogenetic correlation")
+show_mat(Mr, "Residual correlation")
+dev.off()
+cat("\nwritten ../figures/Fig3_mrpmm.pdf\n")
