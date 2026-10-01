@@ -23,6 +23,8 @@ Scripts 14 and 15 are written and tested. Scripts 16 to 24 are specified but not
 | Referee reports | `~/Dropbox/Research/auk/Decision on Nature Ecology...txt` and `Submission_NatComms/Decision on manuscript NCOMMS...txt` |
 | AVONET | `~/Desktop/Research/predicts_colour/avonet/AVONET Supplementary dataset 1.xlsx`, sheet `AVONET1_BirdLife` |
 | Livezey 1988, Poole 1938 | `~/Dropbox/Research/auk/Livezey.pdf`, `Poole.pdf` |
+| Codon alignments and gene trees | `~/Desktop/Research/auk/postshrink_alignments` (not in the repo) |
+| HyphAeon notes | `HYPHAEON.md` in this repo |
 
 ## Decisions already taken. Do not reopen these.
 
@@ -158,6 +160,28 @@ trait effect.
 `ggtree`, `MCMCglmm`. Available and used: `readxl`, `ape`, `phangorn`, `ggplot2`, `dplyr`,
 `brms`, `phytools`, `patchwork`. `node` is not installed, so the dataviz palette validator
 cannot be run here.
+
+## HyphAeon: resolved, see HYPHAEON.md
+
+Installed and run to completion on a real gene. All four questions answered.
+
+1. **It is RERconverge-style.** The `--permulations` flag is documented as the
+   "RERconverge null model", so the gene-level p-value is an empirical permulation p-value
+   under Brownian motion, not a diversifying-selection test. The plan stands unchanged.
+2. **Inputs match our files unchanged.** 100% taxon concordance, 76 shared taxa on the test
+   gene. Alignments and per-gene trees are at `~/Desktop/Research/auk/postshrink_alignments`
+   (about 14,957 genes). Taxon labels are the six-letter codes.
+3. **1.5 s of compute per gene**, but 5.3 s per process, so the runner must load the model
+   once and loop rather than calling the CLI per gene.
+4. **Gene trees**, which sit beside each alignment and are accepted directly.
+
+**Gene-level statistics are in the JSON only**; the CSV is site-level. The collector must
+parse JSON.
+
+**Environment, Intel Mac.** torch caps at 2.2.2, which predates NumPy 2, so the whole stack
+must be pinned to the NumPy 1 era *before* installing hyphaeon. The exact recipe is in
+HYPHAEON.md. Also recorded there: `exceptiongroup` segfaults inside its own error
+formatter, hiding every real error until the hook is reset.
 
 ## Open questions, blocking
 
