@@ -29,6 +29,7 @@
 
 library(brms)
 library(ape)
+suppressMessages(library(phytools))
 
 CHAINS <- 4
 ITER   <- 4000
@@ -37,7 +38,7 @@ ADAPT  <- 0.95
 SEED   <- 42
 # Set QUICK to TRUE for a compile-and-run check rather than a production fit.
 QUICK  <- as.logical(Sys.getenv("MRPMM_QUICK", "FALSE"))
-if (QUICK) { CHAINS <- 2; ITER <- 400; WARMUP <- 200 }
+if (QUICK) { CHAINS <- 2; ITER <- 600; WARMUP <- 300 }
 
 dir.create("../output", showWarnings = FALSE)
 dir.create("../figures", showWarnings = FALSE)
@@ -88,7 +89,12 @@ cat("taxa with no assembly record:",
 
 # ---- 3. Model frame ----
 
-vars <- c("ln_dn", "ln_ds", "ln_len", "ln_genes", "loading_index", "gc_mean")
+# Four responses by default. Six on 81 taxa leaves the phylogenetic and residual
+# correlation matrices weakly identified and sampling becomes impractically slow: a
+# 2-chain 400-iteration test run had not finished in 30 minutes. Set MRPMM_FULL=TRUE to
+# add gene count and mean GC once the four-response model is understood.
+vars <- c("ln_dn", "ln_ds", "ln_len", "loading_index")
+if (as.logical(Sys.getenv("MRPMM_FULL", "FALSE"))) vars <- c(vars, "ln_genes", "gc_mean")
 if (all(is.na(tr$gc_var))) {
   message("gc_var is empty (alignments absent), so it is not a response. ",
           "Rerun script 14 with ../data/postshrink_alignments/ present to include it.")
@@ -107,7 +113,16 @@ for (v in vars) dd[[v]] <- as.numeric(scale(dd[[v]]))
 dd$busco <- as.numeric(scale(dd$busco))
 
 phy <- drop.tip(phy, setdiff(phy$tip.label, dd$tip))
+# The dated tree fails is.ultrametric by rounding only. Left as is, the phylogenetic
+# covariance is poorly conditioned and sampling stalls, so the rounding is absorbed here.
+if (!is.ultrametric(phy)) {
+  phy <- phytools::force.ultrametric(phy, method = "extend")
+  message("tree coerced to ultrametric (rounding only)")
+}
 A <- vcv.phylo(phy, corr = TRUE)
+ev <- eigen(A, only.values = TRUE)$values
+cat("phylogenetic covariance: condition", format(max(ev) / min(ev), digits = 3),
+    " min eigenvalue", format(min(ev), digits = 3), "\n")
 dd <- dd[match(rownames(A), dd$tip), ]
 dd$phylo <- dd$tip
 stopifnot(identical(dd$phylo, rownames(A)))
@@ -130,7 +145,11 @@ form <- Reduce(`+`, bf_list) + set_rescor(TRUE)
 resp_nm <- gsub("[^A-Za-z0-9]", "", vars)
 pr <- c(
   do.call(c, lapply(resp_nm, function(r) prior_string("normal(0, 1)", class = "b", resp = r))),
-  do.call(c, lapply(resp_nm, function(r) prior_string("student_t(3, 0, 2)", class = "sd", resp = r))),
+  # Responses are standardised, so a phylogenetic sd much above 1 is implausible. The
+  # brms default student_t(3, 0, 2.5) is diffuse enough that the sampler wanders into the
+  # region where phylogenetic and residual variance trade off against each other, which
+  # is where the chains failed to mix (Rhat 1.99 on a short run).
+  do.call(c, lapply(resp_nm, function(r) prior_string("student_t(3, 0, 1)", class = "sd", resp = r))),
   prior(lkj(2), class = "cor"),
   prior(lkj(2), class = "rescor"))
 
@@ -147,9 +166,17 @@ save(fit, dd, A, vars, file = "../output/mrpmm_fit.Rdata")
 # ---- 5. Convergence ----
 
 rh <- brms::rhat(fit); es <- brms::neff_ratio(fit)
-cat("\nmax Rhat:", round(max(rh, na.rm = TRUE), 4),
+max_rhat <- max(rh, na.rm = TRUE)
+cat("\nmax Rhat:", round(max_rhat, 4),
     " min ESS ratio:", round(min(es, na.rm = TRUE), 3),
     " divergences:", sum(subset(nuts_params(fit), Parameter == "divergent__")$Value), "\n")
+if (max_rhat > 1.05) {
+  warning("CHAINS HAVE NOT MIXED (Rhat > 1.05). Do not interpret the correlations below. ",
+          "Separating phylogenetic from residual covariance is weakly identified with ",
+          "81 taxa. Options, in order: run without QUICK; drop to three responses; ",
+          "fix the phylogenetic signal rather than estimating it per response.",
+          call. = FALSE)
+}
 
 
 # ---- 6. Phylogenetic and residual correlations ----

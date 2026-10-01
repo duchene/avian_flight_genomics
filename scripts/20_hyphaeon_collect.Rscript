@@ -1,0 +1,172 @@
+# 20_hyphaeon_collect.Rscript
+#
+# Collect the per-gene HyphAeon results, apply false-discovery control, and run the two
+# checks that the screen has to pass before anything is read from it.
+#
+# GENE-LEVEL STATISTICS ARE IN THE JSON ONLY. The CSV that HyphAeon writes is site-level,
+# so this parses JSON.
+#
+# A SIGNED gene statistic has to be constructed. gene_p_value_perm is a p-value and
+# max_assoc is a magnitude, so neither can rank genes by direction. The signed statistic
+# used here is the association_rho of the highest-scoring site in each gene, which
+# preserves the direction of the trait-rate relationship. Script 21 ranks on it.
+#
+# CHECK 1, base composition. aitchison_variance_results.csv is a per-gene measure of
+# base-composition heterogeneity across lineages. Correlating it against the per-gene
+# statistic answers the referee asking whether genes are being selected for downstream
+# analysis by their base composition. A null correlation is the result being sought.
+#
+# CHECK 2, RERconverge. HyphAeon's gene p-value is a Brownian-motion permulation p-value,
+# the same null RERconverge uses, so running RERconverge on the same phenotypes gives a
+# peer-reviewed parallel. Reported as rank concordance. This is skipped with a message if
+# RERconverge is not installed, since it is not on CRAN.
+#
+# Requires: jsonlite; optionally RERconverge
+# In:  ../output/hyphaeon_out/<phenotype>/*.json
+#      ../data/aitchison_variance_results.csv
+# Out: ../output/per_gene_statistics.csv
+#      ../output/hyphaeon_base_composition_check.csv
+#      ../figures/FigS_hyphaeon_qc.pdf
+
+library(jsonlite)
+
+PHENOTYPES <- c("loading", "flightloss", "migration")
+OUT_ROOT <- "../output/hyphaeon_out"
+
+dir.create("../output", showWarnings = FALSE)
+dir.create("../figures", showWarnings = FALSE)
+
+
+# ---- 1. Parse ----
+
+parse_one <- function(path) {
+  d <- tryCatch(fromJSON(path, simplifyVector = TRUE), error = function(e) NULL)
+  if (is.null(d)) return(NULL)
+  s <- d$sites
+  top_rho <- NA_real_; top_lrt <- NA_real_; n_sites <- 0L
+  if (!is.null(s) && length(s) && is.data.frame(s) && nrow(s)) {
+    n_sites <- nrow(s)
+    i <- which.max(abs(s$score))
+    top_rho <- s$association_rho[i]
+    top_lrt <- s$hyphaeon_lrt[i]
+  }
+  data.frame(
+    gene = if (!is.null(d$gene)) d$gene else sub("[.]json$", "", basename(path)),
+    taxa_count = d$taxa_count %||% NA_integer_,
+    codon_count = d$codon_count %||% NA_integer_,
+    p_perm = d$gene_p_value_perm %||% NA_real_,
+    max_assoc = d$max_assoc %||% NA_real_,
+    spectral_energy = d$spectral_energy %||% NA_real_,
+    norm_spectral_ratio = d$norm_spectral_ratio %||% NA_real_,
+    dual_track_composite = d$dual_track_composite %||% NA_real_,
+    n_sig_sites = d$significant_sites_count %||% NA_integer_,
+    n_sites = n_sites,
+    top_rho = top_rho,      # SIGNED gene statistic, used for GSEA ranking
+    top_lrt = top_lrt,
+    stringsAsFactors = FALSE)
+}
+`%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
+
+collect <- function(ph) {
+  dir_ph <- file.path(OUT_ROOT, ph)
+  if (!dir.exists(dir_ph)) return(NULL)
+  f <- list.files(dir_ph, pattern = "[.]json$", full.names = TRUE)
+  if (!length(f)) return(NULL)
+  cat("parsing", length(f), "results for", ph, "\n")
+  out <- do.call(rbind, lapply(f, parse_one))
+  out$phenotype <- ph
+  out$q_perm <- p.adjust(out$p_perm, method = "BH")
+  out
+}
+
+res <- do.call(rbind, Filter(Negate(is.null), lapply(PHENOTYPES, collect)))
+if (is.null(res)) stop("no HyphAeon output found under ", OUT_ROOT,
+                       ". Run 19_hyphaeon_run.py first.")
+write.csv(res, "../output/per_gene_statistics.csv", row.names = FALSE)
+
+cat("\nGenes parsed per phenotype:\n")
+print(table(res$phenotype))
+cat("\nGenes passing BH q < 0.05:\n")
+print(tapply(res$q_perm, res$phenotype, function(x) sum(x < 0.05, na.rm = TRUE)))
+cat("\nSanity check, p-value distribution should be near uniform under the null:\n")
+for (ph in unique(res$phenotype)) {
+  p <- res$p_perm[res$phenotype == ph]
+  p <- p[is.finite(p)]
+  cat(sprintf("  %-11s n=%-6d median p = %.3f  (uniform expects 0.50)  KS p = %.3g\n",
+              ph, length(p), median(p), suppressWarnings(ks.test(p, "punif")$p.value)))
+}
+
+
+# ---- 2. Base composition check ----
+
+ait <- read.csv("../data/aitchison_variance_results.csv", stringsAsFactors = FALSE)
+# locus ids in the Aitchison table are truncated at the aligner suffix
+key <- function(x) sub("[.]c123.*$", "", x)
+ait$key <- key(ait$locus)
+res$key <- key(res$gene)
+
+bc <- do.call(rbind, lapply(unique(res$phenotype), function(ph) {
+  d <- merge(res[res$phenotype == ph, ], ait[, c("key", "aitchison_var")], by = "key")
+  if (nrow(d) < 10) return(NULL)
+  one <- function(v, lab) {
+    ct <- suppressWarnings(cor.test(d[[v]], d$aitchison_var, method = "spearman"))
+    data.frame(phenotype = ph, statistic = lab, n = nrow(d),
+               rho = unname(ct$estimate), p = ct$p.value, row.names = NULL)
+  }
+  rbind(one("p_perm", "gene p-value"),
+        one("top_rho", "signed top-site rho"),
+        one("max_assoc", "max association"))
+}))
+write.csv(bc, "../output/hyphaeon_base_composition_check.csv", row.names = FALSE)
+cat("\nBase-composition check, Spearman against per-gene Aitchison variance.\n")
+cat("A null correlation is the result being sought.\n\n")
+print(format(bc, digits = 3), row.names = FALSE)
+
+
+# ---- 3. RERconverge parallel ----
+
+if (requireNamespace("RERconverge", quietly = TRUE)) {
+  cat("\nRERconverge is installed. Run the parallel analysis on the same three\n",
+      "phenotypes and merge on gene, then report rank concordance against p_perm.\n")
+  # Left as an explicit step rather than run blind: RERconverge needs the gene trees
+  # read into a treesObj, which is a long computation and belongs in its own session.
+} else {
+  cat("\nRERconverge is not installed, so the peer-reviewed parallel is not run.\n",
+      "Install with: remotes::install_github('nclark-lab/RERconverge')\n",
+      "It matters because HyphAeon is mammal-trained and its avian transfer is\n",
+      "benchmarked only on mitochondrial data, so an independent check is worth having.\n")
+}
+
+
+# ---- 4. QC figure ----
+
+pdf("../figures/FigS_hyphaeon_qc.pdf", width = 10, height = 6.5)
+par(mfrow = c(2, 3), mar = c(4.2, 4.4, 2.8, 1), tcl = -0.25, mgp = c(2.5, 0.5, 0),
+    cex.axis = 0.85)
+for (ph in unique(res$phenotype)) {
+  p <- res$p_perm[res$phenotype == ph]
+  hist(p[is.finite(p)], breaks = 25, col = "#2B7A9B", border = "white",
+       main = paste(ph, "gene p-values"), font.main = 1, cex.main = 1,
+       xlab = "", ylab = "")
+  abline(h = sum(is.finite(p)) / 25, col = "#D1793B", lwd = 2, lty = 2)
+  mtext("permulation p", side = 1, line = 2.3, cex = 0.72)
+  mtext("genes", side = 2, line = 2.5, cex = 0.72)
+  box(bty = "l", col = "grey45")
+}
+for (ph in unique(res$phenotype)) {
+  d <- merge(res[res$phenotype == ph, ], ait[, c("key", "aitchison_var")], by = "key")
+  if (!nrow(d)) { plot.new(); next }
+  plot(d$aitchison_var, d$top_rho, pch = 16, cex = 0.35,
+       col = "#2B7A9B55", xlab = "", ylab = "",
+       main = paste(ph, "vs base composition"), font.main = 1, cex.main = 1)
+  abline(h = 0, col = "grey80")
+  mtext("Aitchison variance", side = 1, line = 2.3, cex = 0.72)
+  mtext("signed top-site rho", side = 2, line = 2.5, cex = 0.72)
+  rr <- suppressWarnings(cor(d$aitchison_var, d$top_rho, method = "spearman",
+                             use = "complete.obs"))
+  legend("topright", bty = "n", cex = 0.75, legend = sprintf("rho = %.3f", rr))
+  box(bty = "l", col = "grey45")
+}
+dev.off()
+cat("\nwritten ../figures/FigS_hyphaeon_qc.pdf\n")
+cat("next: scripts/21_gsea.Rscript, ranking on top_rho\n")

@@ -1,0 +1,91 @@
+# 18_hyphaeon_prep.Rscript
+#
+# Prepare inputs for the per-gene HyphAeon screen.
+#
+# Writes one phenotype table carrying all three phenotypes, and a manifest listing every
+# gene with its alignment and tree. HyphAeon selects the phenotype at run time with -tc,
+# so a single file serves all three analyses.
+#
+# The alignments need no reformatting. Taxon labels in the MACSE output are the same
+# six-letter codes used in traits_per_taxon.csv, and a test run reported 100 percent taxon
+# concordance. Each alignment has a matching .treefile beside it, which HyphAeon accepts
+# directly, so gene trees are used rather than the dated species tree.
+#
+# Requires: none beyond base R
+# In:  ../output/traits_per_taxon.csv
+#      alignment directory, see ALN_DIR below
+# Out: ../output/hyphaeon_input/phenotypes.csv
+#      ../output/hyphaeon_input/manifest.csv
+
+# The alignments are large and live outside the repository.
+ALN_DIR <- Sys.getenv("AUK_ALIGNMENTS", "~/Desktop/Research/auk/postshrink_alignments")
+ALN_DIR <- path.expand(ALN_DIR)
+MIN_TAXA <- 20          # genes with fewer sequenced taxa carry little trait signal
+
+out_dir <- "../output/hyphaeon_input"
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+tr <- read.csv("../output/traits_per_taxon.csv", stringsAsFactors = FALSE)
+
+
+# ---- 1. Phenotype table ----
+#
+#   loading_index  continuous, the primary flight predictor, run with --continuous
+#   flight_loss    binary, 1 for the sister scored as lost or near lost
+#   migratory      binary, 1 for the sister scored as a winged migrant
+#
+# Flight ability and primary flight style are not included. HyphAeon accepts only binary
+# or continuous phenotypes and both of those are multi-level.
+
+pheno <- data.frame(species = tr$code,
+                    loading_index = tr$loading_index,
+                    flight_loss = tr$flight_loss,
+                    migratory = tr$migratory,
+                    stringsAsFactors = FALSE)
+stopifnot(nrow(pheno) == 84, !anyNA(pheno$loading_index))
+write.csv(pheno, file.path(out_dir, "phenotypes.csv"), row.names = FALSE)
+
+cat("phenotypes.csv:", nrow(pheno), "taxa\n")
+cat("  loading_index  continuous, range",
+    paste(round(range(pheno$loading_index), 2), collapse = " to "), "\n")
+cat("  flight_loss    binary,", sum(pheno$flight_loss), "positive\n")
+cat("  migratory      binary,", sum(pheno$migratory), "positive\n\n")
+
+
+# ---- 2. Gene manifest ----
+
+if (!dir.exists(ALN_DIR)) {
+  stop("alignment directory not found: ", ALN_DIR,
+       "\nSet AUK_ALIGNMENTS to its location.")
+}
+aln <- list.files(ALN_DIR, pattern = "[.]fasta$", full.names = TRUE)
+cat("alignments found:", length(aln), "\n")
+
+gene <- sub("[.]fasta$", "", basename(aln))
+tre <- paste0(aln, ".treefile")
+has_tree <- file.exists(tre)
+
+# Count sequenced taxa per gene, and how many of them carry a phenotype.
+n_taxa <- integer(length(aln)); n_pheno <- integer(length(aln))
+for (i in seq_along(aln)) {
+  hdr <- grep("^>", readLines(aln[i], warn = FALSE), value = TRUE)
+  codes <- sub("^>", "", hdr)
+  n_taxa[i] <- length(codes)
+  n_pheno[i] <- sum(codes %in% pheno$species)
+  if (i %% 2000 == 0) cat("  scanned", i, "of", length(aln), "\n")
+}
+
+man <- data.frame(gene = gene, alignment = aln, tree = tre,
+                  has_tree = has_tree, n_taxa = n_taxa, n_phenotyped = n_pheno,
+                  stringsAsFactors = FALSE)
+man$keep <- man$has_tree & man$n_phenotyped >= MIN_TAXA
+
+cat("\ngenes with a tree:", sum(man$has_tree), "\n")
+cat("genes with at least", MIN_TAXA, "phenotyped taxa:", sum(man$n_phenotyped >= MIN_TAXA), "\n")
+cat("genes retained:", sum(man$keep), "\n")
+cat("phenotyped taxa per gene: median", median(man$n_phenotyped),
+    " range", paste(range(man$n_phenotyped), collapse = " to "), "\n")
+
+write.csv(man, file.path(out_dir, "manifest.csv"), row.names = FALSE)
+cat("\nwritten", file.path(out_dir, "manifest.csv"), "\n")
+cat("next: scripts/19_hyphaeon_run.py\n")

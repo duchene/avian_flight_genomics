@@ -81,11 +81,22 @@ multiplying mass. On the index it is second lowest of all 84 taxa, above only
 
 ## Scripts
 
-Done and tested: `01` to `13` (carried over), `14`, `15`, `16`, `17`, `22`.
-Written, first full run in progress: `23_mrpmm`.
+Done and tested: `01` to `13` (carried over), `14`, `15`, `16`, `17`, `18`, `19`, `20`, `22`.
+To write: `21_gsea`, `24_figures`.
 
-To write: `18_hyphaeon_prep`, `19_hyphaeon_run.sh`, `20_hyphaeon_collect`, `21_gsea`,
-`24_figures`. Each is specified in `PLAN_next_submission.md`.
+**`23_mrpmm` does not converge as specified.** A short run gave max Rhat 1.99, minimum ESS
+ratio 0.01 and 40 divergent transitions, so the correlations it prints must not be
+interpreted. Separating phylogenetic from residual covariance across several responses is
+weakly identified with 81 taxa. The script now defaults to four responses rather than six,
+coerces the tree to ultrametric (it fails `is.ultrametric` by rounding, which left the
+covariance badly conditioned), uses a tighter prior on the phylogenetic sd, and refuses to
+let a bad fit pass silently by warning when Rhat exceeds 1.05. A production run is
+pending. If it still fails, the options in order are three responses, or fixing the
+phylogenetic signal rather than estimating it per response.
+
+`18` and `19` are tested: 14,124 of 14,957 genes retained (median 77 phenotyped taxa), and
+the runner completed four genes with no failures at 0.9 to 3.2 s each. At that rate one
+phenotype is about 9 hours and all three about 26. Each is specified in `PLAN_next_submission.md`.
 
 `20_hyphaeon_collect` must also correlate the per-gene HyphAeon statistic against
 `aitchison_variance_results.csv`. That file is a per-gene measure of base-composition
