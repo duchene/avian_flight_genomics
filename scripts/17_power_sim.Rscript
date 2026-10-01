@@ -1,0 +1,170 @@
+# 17_power_sim.Rscript
+#
+# What effect size can 42 sister pairs detect, gene by gene?
+#
+# Run before the per-gene screen of scripts 18 to 20, so that a null result there can be
+# read against a stated detection limit rather than left ambiguous. This also answers the
+# referee who asked whether a small subset of pairs could be driving the signal.
+#
+# WHAT IS BEING POWERED. HyphAeon's per-gene statistic is not documented in the preprint,
+# so this cannot be a power analysis of HyphAeon specifically. It powers the design: 42
+# pairs, the observed spread of the flight index, and the per-gene residual noise measured
+# from the real dN and dS data. Any per-gene method testing a trait-rate association
+# across these pairs is bounded by this.
+#
+# Requires: none beyond base R
+# In:  ../output/traits_contrasts.csv, ../output/traits_per_taxon.csv,
+#      ../data/dnds_sisdifs_vol.Rdata
+# Out: ../output/power_curves.csv, ../figures/FigS_power.pdf
+
+set.seed(42)
+N_GENES_NOISE <- 400     # genes sampled to measure realistic residual noise
+N_REP         <- 500     # replicate screens per effect size
+N_GENES_SIM   <- 14785   # genes per simulated screen, matching the real data
+PROP_TRUE     <- 0.05    # fraction of genes with a true effect
+
+contr <- read.csv("../output/traits_contrasts.csv", stringsAsFactors = FALSE)
+taxa  <- read.csv("../output/traits_per_taxon.csv", stringsAsFactors = FALSE)
+load("../data/dnds_sisdifs_vol.Rdata")
+
+dir.create("../output", showWarnings = FALSE)
+dir.create("../figures", showWarnings = FALSE)
+
+lesser <- taxa$code[taxa$sister == "lesser"]
+x <- contr$d_loading
+names(x) <- sub("-[A-Z]{2}$", "", contr$pair_id)
+n <- length(x)
+cat("flight index contrast: n =", n, " sd =", round(sd(x), 3),
+    " range", paste(round(range(x), 2), collapse = " to "), "\n\n")
+
+
+# ---- 1. Measure per-gene residual noise from the real data ----
+#
+# For each sampled gene, build the pair contrasts, regress on the flight index, and take
+# the residual standard deviation. The median across genes is the noise a per-gene test
+# actually faces. Reported for context; the power curves below are scale-free.
+
+resid_sd <- function(d, label) {
+  d <- d[is.finite(d$moldiff) & d$moldiff > 0, ]
+  d$contrast <- ifelse(d$sp1 %in% lesser, -1, 1) * log(d$moldiff)
+  loci <- sample(unique(d$locus), min(N_GENES_NOISE, length(unique(d$locus))))
+  dd <- d[d$locus %in% loci, ]
+  sds <- vapply(split(dd, dd$locus), function(g) {
+    y <- setNames(g$contrast, g$comparison)
+    cm <- intersect(names(y), names(x))
+    if (length(cm) < 20) return(NA_real_)
+    summary(lm(y[cm] ~ x[cm]))$sigma
+  }, numeric(1))
+  sds <- sds[is.finite(sds)]
+  cat(sprintf("%-3s residual sd across %d genes: median %.3f (IQR %.3f to %.3f)\n",
+              label, length(sds), median(sds), quantile(sds, .25), quantile(sds, .75)))
+  median(sds)
+}
+
+sigma <- c(dS = resid_sd(sisdifggds, "dS"),
+           dN = resid_sd(sisdifggdn, "dN"),
+           w  = resid_sd(sisdifggdnds, "w"))
+cat("\n")
+
+
+# ---- 2. Power across effect sizes ----
+#
+# Effect size is the correlation between the per-gene rate contrast and the flight index,
+# which is scale-free and so comparable across rate types.
+#
+# Single-gene power is the chance of detecting one gene at alpha = 0.05 uncorrected.
+# Screen power is the chance of detecting a truly affected gene when 14,785 genes are
+# tested together under Benjamini-Hochberg control at 0.05, which is the situation
+# scripts 18 to 20 are in.
+
+rho_grid <- seq(0.05, 0.75, by = 0.05)
+
+# The test of a slope in simple linear regression has an exact non-central t
+# distribution, so power is computed analytically rather than by refitting models. For a
+# population correlation rho the non-centrality is rho / sqrt(1 - rho^2) * sqrt(n - 1).
+
+ncp_of <- function(rho) rho / sqrt(1 - rho^2) * sqrt(n - 1)
+df <- n - 2
+tcrit <- qt(0.975, df)
+
+single_power <- function(rho) {
+  l <- ncp_of(rho)
+  pt(-tcrit, df, ncp = l) + (1 - pt(tcrit, df, ncp = l))
+}
+
+# p-values under the alternative are drawn from the same non-central t, so a screen of
+# 14,785 genes costs nothing. Null genes have exactly uniform p-values.
+
+screen_power <- function(rho) {
+  l <- ncp_of(rho)
+  n_true <- round(N_GENES_SIM * PROP_TRUE)
+  mean(replicate(N_REP, {
+    t_true <- rt(n_true, df, ncp = l)
+    p_true <- 2 * pt(-abs(t_true), df)
+    q <- p.adjust(c(p_true, runif(N_GENES_SIM - n_true)), method = "BH")
+    mean(q[seq_len(n_true)] < 0.05)
+  }))
+}
+
+cat("computing power across", length(rho_grid), "effect sizes\n")
+pw <- data.frame(rho = rho_grid,
+                 single_gene = vapply(rho_grid, single_power, numeric(1)),
+                 screen_bh = vapply(rho_grid, screen_power, numeric(1)))
+write.csv(pw, "../output/power_curves.csv", row.names = FALSE)
+print(format(pw, digits = 2), row.names = FALSE)
+
+at80 <- function(col) {
+  v <- pw[[col]]
+  if (max(v) < 0.8) return(NA_real_)
+  approx(v, pw$rho, xout = 0.8, ties = "ordered")$y
+}
+cat(sprintf("\neffect size for 80%% power, single gene : rho = %.2f\n", at80("single_gene")))
+cat(sprintf("effect size for 80%% power, BH screen  : rho = %.2f\n", at80("screen_bh")))
+
+
+# ---- 3. Leave-one-pair-out influence ----
+#
+# Addresses the referee concern that a small subset of pairs may drive a result.
+
+set.seed(1)
+b_mod <- 0.4 / sd(x) * sqrt(1 / (1 - 0.4^2))
+y_mod <- b_mod * x + rnorm(n)
+full <- unname(coef(lm(y_mod ~ x))[2])
+loo <- vapply(seq_len(n), function(i) unname(coef(lm(y_mod[-i] ~ x[-i]))[2]), numeric(1))
+names(loo) <- names(x)
+cat(sprintf("\nleave-one-pair-out at rho = 0.4: full slope %.3f, range %.3f to %.3f\n",
+            full, min(loo), max(loo)))
+cat("most influential pair:", names(which.max(abs(loo - full))), "\n")
+
+
+# ---- 4. Figure ----
+
+pdf("../figures/FigS_power.pdf", width = 9, height = 4.2)
+par(mfrow = c(1, 2), mar = c(4.2, 4.4, 2.6, 1), tcl = -0.25, mgp = c(2.5, 0.5, 0),
+    cex.axis = 0.85)
+
+plot(pw$rho, pw$single_gene, type = "n", ylim = c(0, 1), xlab = "", ylab = "",
+     main = "Detection power", font.main = 1, cex.main = 1)
+abline(h = c(0.5, 0.8), col = "grey88", lwd = 1)
+lines(pw$rho, pw$single_gene, col = "#2B7A9B", lwd = 2.2)
+lines(pw$rho, pw$screen_bh, col = "#D1793B", lwd = 2.2)
+mtext("effect size (correlation with flight index)", side = 1, line = 2.4, cex = 0.8)
+mtext("power", side = 2, line = 2.5, cex = 0.8)
+legend("bottomright", bty = "n", cex = 0.75, lwd = 2.2, seg.len = 1.4,
+       col = c("#2B7A9B", "#D1793B"),
+       legend = c("single gene, alpha = 0.05",
+                  sprintf("screen of %s genes, BH 0.05",
+                          format(N_GENES_SIM, big.mark = ","))))
+box(bty = "l", col = "grey45")
+
+hist(loo, breaks = 14, col = "#2B7A9B", border = "white", xlab = "", ylab = "",
+     main = "Leave-one-pair-out slope", font.main = 1, cex.main = 1)
+abline(v = full, col = "#D1793B", lwd = 2.2)
+mtext("slope with one pair removed", side = 1, line = 2.4, cex = 0.8)
+mtext("pairs", side = 2, line = 2.5, cex = 0.8)
+legend("topright", bty = "n", cex = 0.75, lwd = 2.2, col = "#D1793B", seg.len = 1.4,
+       legend = "all 42 pairs")
+box(bty = "l", col = "grey45")
+
+dev.off()
+cat("\nwritten ../figures/FigS_power.pdf\n")

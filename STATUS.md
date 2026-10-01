@@ -79,17 +79,49 @@ multiplying mass. On the index it is second lowest of all 84 taxa, above only
 
 ## Scripts
 
-Done and tested: `01` to `13` (carried over, unmodified except path fixes), `14`, `15`.
+Done and tested: `01` to `13` (carried over), `14`, `15`, `16`, `17`, `22`.
 
-To write: `16_rate_contrasts`, `17_power_sim`, `18_hyphaeon_prep`, `19_hyphaeon_run.sh`,
-`20_hyphaeon_collect`, `21_gsea`, `22_age_latency`, `23_mrpmm`, `24_figures`. Each is
-specified in `PLAN_next_submission.md` with inputs and outputs.
+To write: `18_hyphaeon_prep`, `19_hyphaeon_run.sh`, `20_hyphaeon_collect`, `21_gsea`,
+`23_mrpmm`, `24_figures`. Each is specified in `PLAN_next_submission.md`.
+
+`20_hyphaeon_collect` must also correlate the per-gene HyphAeon statistic against
+`aitchison_variance_results.csv`. That file is a per-gene measure of base-composition
+heterogeneity and exists to answer the referee asking whether genes are being selected
+for downstream analysis by their base composition. A null correlation is the result
+being sought. This is a per-gene check and is unrelated to the per-taxon GC covariate
+that script 23 uses.
 
 Script 14 writes `output/traits_per_taxon.csv` (84 rows) and `output/traits_contrasts.csv`
 (42 rows). Everything downstream reads those two files, not the spreadsheet.
 
+## Results so far
+
+**16, rate contrasts.** The flight index explains nothing that survives BH correction
+across the six responses (all p_adj = 0.123; raw p for dS is 0.049 to 0.055). Migration
+does: omega is lower in the migratory sister, p_adj = 0.019 on both response types. This
+is the pattern anticipated before the script was written, and it is why migration is in
+the model.
+
+**17, power.** With 42 pairs, 80% power needs a correlation of 0.41 for a single gene at
+alpha = 0.05, and 0.55 for a gene inside a BH-controlled screen of 14,785. That is a hard
+bound on what scripts 18 to 20 can return, and a null there must be read against it.
+
+**22, age.** The age-by-trait interaction is not significant for any rate type
+(p = 0.68, 0.99, 0.18). The age effect sits in the minimal-change pairs (dN slope
+p = 0.023, dS p = 0.077) and is absent from the pairs that changed (p = 0.99, 0.70). The
+latency simulation cannot generate the observed age correlation at any latency for dN or
+omega. **The previous paper's reading of its Figure 3, that older pairs show larger
+trait-driven differences, does not survive.** The age relationship is elapsed time, not
+trait effect.
+
 ## Traps
 
+- **`sp1` in `dnds_sisdifs_vol.Rdata` is NOT always the lesser-flight sister.** In 7 of
+  the 42 pairs it is the greater-flight one: ANTCAR-CHOACU, AQUCHR-HALALB, STROCC-TYTALB,
+  TROMEL-APAVIT, BUCABY-BUCRHI, MENNOV-ATRCLA, TAEGUT-LONSTR. These are the pairs AviList
+  reordered. `moldiff` is sp1/sp2, so orienting by position silently flips the sign for a
+  sixth of the data. Script 16 orients against the trait table and prints the affected
+  pairs. Any new script touching `moldiff` must do the same.
 - **Species names differ between sources.** Table S1 uses AviList 2025, the tree and
   `taxonomy_codes.csv` use B10K names. Join through the six-letter taxon code, never by
   name. Known renames: *Laterallus rogersi* = `Atlantisia_rogersi`, *Anarhynchus
@@ -146,7 +178,5 @@ contamination estimates.
 
 ## Next action
 
-Write `16_rate_contrasts.Rscript`. It needs nothing unresolved: it reads
-`output/traits_contrasts.csv` and `data/dnds_sisdifs_vol.Rdata`, and fits genome-wide dN,
-dS and omega contrasts on `d_loading` with `migration_pair` as the second predictor and
-`d_logmass` as a covariate.
+Write `23_mrpmm.Rscript`, which is unblocked and uses `brms`. Scripts 18 to 21 wait on the
+two HyphAeon questions above, and 19 additionally on the great auk damage control.

@@ -1,0 +1,164 @@
+# 16_rate_contrasts.Rscript
+#
+# Genome-wide dN, dS and omega contrasts against the flight index.
+#
+# Sister pairs are independent contrasts by construction, so ordinary least squares on
+# the 42 pair-level contrasts needs no further phylogenetic correction.
+#
+# Migration enters as a second predictor rather than as an alternative. The two axes are
+# statistically orthogonal, and the only significant genome-wide signal found so far sits
+# on the migration axis, so fitting the flight index alone risks attributing a null to
+# the wrong cause.
+#
+# DIRECTION. moldiff in dnds_sisdifs_vol.Rdata is sp1/sp2, but sp1 is NOT always the
+# lesser-flight sister: in 7 of the 42 pairs the AviList reordering of Table S1 put the
+# sisters the other way round. Every contrast below is therefore oriented explicitly
+# against the trait table, never by position.
+#
+# Requires: none beyond base R
+# In:  ../output/traits_contrasts.csv, ../output/traits_per_taxon.csv,
+#      ../data/dnds_sisdifs_vol.Rdata
+# Out: ../output/rate_contrasts.csv, ../output/rate_contrast_models.csv,
+#      ../figures/Fig2_rate_contrasts.pdf
+
+contr <- read.csv("../output/traits_contrasts.csv", stringsAsFactors = FALSE)
+taxa  <- read.csv("../output/traits_per_taxon.csv", stringsAsFactors = FALSE)
+load("../data/dnds_sisdifs_vol.Rdata")
+
+dir.create("../output", showWarnings = FALSE)
+dir.create("../figures", showWarnings = FALSE)
+
+
+# ---- 1. Orientation key ----
+
+lesser <- taxa$code[taxa$sister == "lesser"]
+pair_of <- setNames(contr$pair_id, sub("-[A-Z]{2}$", "", contr$pair_id))
+
+orient <- function(d) {
+  # Returns log(rate in the greater-flight sister / rate in the lesser-flight sister).
+  # moldiff is sp1/sp2, so the sign depends on which sister sp1 is.
+  s <- ifelse(d$sp1 %in% lesser, -1, 1)
+  s * log(d$moldiff)
+}
+
+flipped <- unique(sisdifggds[!sisdifggds$sp1 %in% lesser, "comparison"])
+cat("pairs where sp1 is the greater-flight sister, sign reversed:", length(flipped), "\n")
+cat("  ", paste(flipped, collapse = ", "), "\n\n")
+
+
+# ---- 2. Genome-wide contrast per pair ----
+#
+# Two summaries per pair and rate type.
+#   med_logratio  median across genes of log(greater / lesser). A positive value means
+#                 the more flight-capable sister evolves faster.
+#   prop_accel    proportion of genes in which the more flight-capable sister is faster,
+#                 centred on 0.5. Comparable to propAccel* used in the previous version.
+
+summarise_rate <- function(d, label) {
+  d$contrast <- orient(d)
+  d <- d[is.finite(d$contrast), ]
+  agg <- do.call(rbind, lapply(split(d, d$comparison), function(x) {
+    data.frame(comparison = x$comparison[1],
+               n_genes = nrow(x),
+               med_logratio = median(x$contrast),
+               prop_accel = mean(x$contrast > 0) - 0.5,
+               stringsAsFactors = FALSE)
+  }))
+  names(agg)[-1] <- paste0(names(agg)[-1], "_", label)
+  agg
+}
+
+rates <- Reduce(function(a, b) merge(a, b, by = "comparison"),
+                list(summarise_rate(sisdifggds,   "ds"),
+                     summarise_rate(sisdifggdn,   "dn"),
+                     summarise_rate(sisdifggdnds, "w")))
+
+rates$pair_id <- unname(pair_of[rates$comparison])
+dat <- merge(contr, rates, by = "pair_id")
+stopifnot(nrow(dat) == 42)
+
+write.csv(dat, "../output/rate_contrasts.csv", row.names = FALSE)
+
+
+# ---- 3. Models ----
+#
+# response ~ flight index contrast + migration + body mass contrast
+#
+# The intercept is retained and is interpretable: it tests whether the more
+# flight-capable sister differs systematically irrespective of the trait values.
+
+responses <- c("med_logratio_ds", "med_logratio_dn", "med_logratio_w",
+               "prop_accel_ds", "prop_accel_dn", "prop_accel_w")
+
+fit_one <- function(y) {
+  f <- as.formula(paste(y, "~ d_loading + migration_pair + d_logmass"))
+  m <- lm(f, data = dat)
+  s <- summary(m)
+  cf <- as.data.frame(s$coefficients)
+  names(cf) <- c("estimate", "se", "t", "p")
+  ci <- confint(m)
+  data.frame(response = y, term = rownames(cf), cf,
+             lower = ci[, 1], upper = ci[, 2],
+             r2 = s$r.squared, n = nobs(m), row.names = NULL)
+}
+
+tab <- do.call(rbind, lapply(responses, fit_one))
+tab$p_adj <- NA
+for (tm in unique(tab$term)) {
+  i <- tab$term == tm
+  tab$p_adj[i] <- p.adjust(tab$p[i], method = "BH")
+}
+write.csv(tab, "../output/rate_contrast_models.csv", row.names = FALSE)
+
+cat("Models, flight index term only (BH-adjusted across the six responses):\n\n")
+print(format(tab[tab$term == "d_loading",
+                 c("response", "estimate", "lower", "upper", "p", "p_adj", "r2")],
+             digits = 3), row.names = FALSE)
+cat("\nMigration term:\n\n")
+print(format(tab[tab$term == "migration_pair",
+                 c("response", "estimate", "lower", "upper", "p", "p_adj")],
+             digits = 3), row.names = FALSE)
+
+
+# ---- 4. Sensitivity on the alternative shape index ----
+
+sens <- do.call(rbind, lapply(responses, function(y) {
+  m <- lm(as.formula(paste(y, "~ d_shape + migration_pair + d_logmass")), data = dat)
+  cf <- summary(m)$coefficients["d_shape", ]
+  data.frame(response = y, term = "d_shape", estimate = cf[1], p = cf[4], row.names = NULL)
+}))
+cat("\nSensitivity, ln(wing / mass^(1/3)) in place of the loading index:\n\n")
+print(format(sens, digits = 3), row.names = FALSE)
+
+
+# ---- 5. Figure ----
+
+pdf("../figures/Fig2_rate_contrasts.pdf", width = 10, height = 6.8)
+par(mfrow = c(2, 3), mar = c(4.2, 4.4, 2.6, 1), tcl = -0.25, mgp = c(2.5, 0.5, 0),
+    cex.axis = 0.85)
+labs <- c(med_logratio_ds = "dS", med_logratio_dn = "dN", med_logratio_w = "omega",
+          prop_accel_ds = "dS", prop_accel_dn = "dN", prop_accel_w = "omega")
+ylabs <- c(rep("median log(greater / lesser)", 3),
+           rep("proportion accelerated - 0.5", 3))
+pal <- c("0" = "#2B7A9B", "1" = "#D1793B")
+for (i in seq_along(responses)) {
+  y <- dat[[responses[i]]]
+  plot(dat$d_loading, y, type = "n", xlab = "", ylab = "",
+       main = labs[responses[i]], font.main = 1, cex.main = 1)
+  abline(h = 0, col = "grey88", lwd = 1)
+  m <- lm(y ~ d_loading, data = dat)
+  xs <- seq(min(dat$d_loading), max(dat$d_loading), length.out = 50)
+  pr <- predict(m, newdata = data.frame(d_loading = xs), interval = "confidence")
+  polygon(c(xs, rev(xs)), c(pr[, 2], rev(pr[, 3])), col = "grey93", border = NA)
+  lines(xs, pr[, 1], col = "grey30", lwd = 1.8)
+  points(dat$d_loading, y, pch = 21, cex = 1.2, lwd = 0.7, col = "white",
+         bg = pal[as.character(dat$migration_pair)])
+  mtext(expression(Delta~ln(mass / wing~length^2)), side = 1, line = 2.4, cex = 0.7)
+  mtext(ylabs[i], side = 2, line = 2.5, cex = 0.7)
+  if (i == 1) legend("topright", bty = "n", cex = 0.75, pch = 21, pt.lwd = 0.7,
+                     col = "white", pt.bg = pal,
+                     legend = c("no migration change", "migration gain"))
+  box(bty = "l", col = "grey45")
+}
+dev.off()
+cat("\nwritten ../figures/Fig2_rate_contrasts.pdf\n")
