@@ -1,0 +1,59 @@
+library(phangorn)
+source("../functions/trimCols.R")
+source("../functions/trimCodons.R")
+
+tr <- read.tree("../data/trauk.tre")
+
+loci <- dir("exon_als_cut_auk")
+nakedloci <- gsub("[.]fa", "", loci)
+locdat <- data.frame(nam = vector(), ntaxpre = vector(), ntaxpost = vector(), ncolpre = vector(), ncolpost = vector())
+
+for(i in 1:length(loci)){
+	
+	# The following is for cleaning cases where the tree inference had failed. This code also has an update to make the temp tree unique.
+	
+	if(file.exists(paste0("basic_alignments/", nakedloci[i], "_macse_NT.fasta.treefile"))) next
+	print(paste0("RUNNING LOCUS ", nakedloci[i]))
+	
+	#
+	
+	# Align using MACSE
+	
+	system(paste0("java -jar macse_v2.03.jar -prog alignSequences -max_refine_iter 0 -seq exon_als_cut_auk/", loci[i], " -out_NT basic_alignments/", nakedloci[i], "_macse_NT.fasta -out_AA basic_alignments/", nakedloci[i], "_macse_AA.fasta"))
+	if(!file.exists(paste0("basic_alignments/", nakedloci[i], "_macse_NT.fasta"))) next
+	system(paste0("java -jar macse_v2.03.jar -prog exportAlignment -align basic_alignments/", nakedloci[i], "_macse_NT.fasta -codonForInternalStop NNN -codonForFinalStop --- -codonForInternalFS --- -charForRemainingFS - -out_NT basic_alignments/", nakedloci[i], "_macse_NT.fasta -out_AA basic_alignments/", nakedloci[i], "_macse_AA.fasta"))
+	dat <- read.dna(paste0("basic_alignments/", nakedloci[i], "_macse_NT.fasta"), format = "fasta")
+	metdat <- dim(dat)
+	
+	# Filter by codon completeness and diversity
+	
+	dat <- trimCols(dat, 0.5)
+	dat <- trimCodons(dat, 0.5)
+	seqstodel <- sapply(rownames(dat), function(x) all(as.character(dat[x,]) %in% c("N", "n", "?", "-", "O", "o", "X", "x")))
+      	if(sum(seqstodel) > 0) dat <- dat[!seqstodel, ]
+	locdat <- rbind(locdat, c(loci[i], metdat[1], nrow(dat), metdat[2], ncol(dat)))
+	if(nrow(dat) > 3 & ncol(dat) > 30){
+	
+		# Replace the name of the Great Auk with PINIMP in alignments
+		if(any(grepl("_", rownames(dat)))) rownames(dat)[grepl("_", rownames(dat))] <- "PINIMP"
+        	write.dna(dat, file = paste0("basic_alignments/", nakedloci[i], "_macse_NT.fasta"), format = "fasta", colsep = "", nbcol = -1)
+        } else {
+        	system(paste0("rm basic_alignments/", nakedloci[i], "_macse_NT.fasta basic_alignments/", nakedloci[i], "_macse_AA.fasta"))
+        	print(paste(nakedloci[i], "has been removed due to missing data"))
+        	next
+      	}
+      	setwd("basic_alignments")
+      	
+      	# Extract the taxa present in each gene from the tree (of sister taxa).
+      	
+	temptr <- drop.tip(tr, tr$tip.label[which(!tr$tip.label %in% rownames(dat))])
+	write.tree(temptr, file = paste0(nakedloci[i], ".temptr.tre"))
+	
+	# Infer IQTREE branch lengths forcing the topology.
+	
+      	system(paste0("iqtree -st DNA -m GTR+I+R -s ", nakedloci[i], "_macse_NT.fasta -fast -redo -te ", nakedloci[i], ".temptr.tre"))
+	system(paste0("rm *log *gz *AA.fasta *iqtree ", nakedloci[i], ".temptr.tre"))
+	colnames(locdat) <- c("nam", "ntaxpre", "ntaxpost", "ncolpre", "ncolpost")
+	write.csv(locdat, file = "../basicAlDat.csv")
+      	setwd("..")
+}

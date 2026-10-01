@@ -1,0 +1,95 @@
+library(phangorn)
+library(ggplot2)
+library(reshape2)
+
+gots <- read.csv("../data/goterms.csv", header = T, row.names = 1)
+rownames(gots) <- gots$ID
+
+load("../data/dnds_branches.Rdata")
+
+trnames <- gsub("_dS[.]tre", "", grep("dS", dir("dnds_analyses"), value = T))
+
+sistdiff <- matrix(NA, length(trnames), (84/2)*4)
+rownames(sistdiff) <- trnames
+colnames(sistdiff) <- as.character(sapply(seq(1, 83, 2), function(x) paste(colnames(dnres)[x], colnames(dnres)[x+1], c("dn", "ds", "dnds", "ol"), sep = "-")), 30)
+
+for(i in 1:length(trnames)){
+        for(j in 1:42){
+                sistdiff[i, (seq(1, 167, 4)[j]):((seq(1, 167, 4)[j])+3)] <- c(dnres[i, seq(1, 83, 2)[j]] / dnres[i, seq(1, 83, 2)[j]+1], dsres[i, seq(1, 83, 2)[j]] / dsres[i, seq(1, 83, 2)[j]+1], dndsres[i, seq(1, 83, 2)[j]] / dndsres[i, seq(1, 83, 2)[j]+1], olres[i, seq(1, 83, 2)[j]] / olres[i, seq(1, 83, 2)[j]+1])
+        }
+}
+
+comptypes <- c("FD", "SM", "DV", "DV", "VV", "DV", "SM", "VV", "SM", "DV", "SM", "VV", "SM", "SM", "DV", "FV", "SM", "SM", "SM", "FV", "FV", "DV", "VV", "FV", "VV", "VV", "VV", "VV", "VV", "SM", "VV", "VV", "SM", "SM", "DV", "VV", "DD", "DV", "SM", "SM", "VV", "VV")
+
+colnames(sistdiff) <- paste(colnames(sistdiff), rep(comptypes, each = 4), sep = "-")
+
+# Define the sistdiff columns per taxon category
+similarCols <- grep("-VV|-DD", colnames(sistdiff))
+diffCols <- grep("-DV|-FD|-FV|-SM", colnames(sistdiff))
+smCols <- grep("-SM", colnames(sistdiff))
+flesCols <- grep("-DV|-FD|-FV", colnames(sistdiff))
+colslist <- list(similarCols, diffCols, smCols, flesCols)
+names(colslist) <- c("similar", "diff", "sm", "fles")
+
+sistdiffall <- sistdiff
+
+blasts <- unlist(sapply(dir("blastSearches"), function(x) readLines(paste0("blastSearches/", x))))
+names(blasts) <- gsub("[.]c123[.]linsi_macse_NT[.]fasta[.]txt", "", names(blasts))
+
+## Loop to save top 10% loci for each taxon category
+
+for(i in 1:length(colslist)){
+
+sistdiff <- sistdiffall[, colslist[[i]]]
+
+# Remove loci with few data points
+narows <- apply(sistdiff, 1, function(x) sum(is.na(x)) / length(x))
+sistdiff <- sistdiff[narows < 0.5,]
+
+sistdiffgg <- melt(sistdiff)
+sistdiffgg <- cbind(sistdiffgg, do.call("rbind", strsplit(as.character(sistdiffgg[,2]), "-")))
+sistdiffgg[,2] <- sapply(as.character(sistdiffgg[,2]), function(x) paste0(strsplit(x, split = "-")[[1]][1:2], collapse = "-"))
+colnames(sistdiffgg) <- c("locus", "comparison", "moldiff", "sp1", "sp2", "moldat", "comptype")
+
+sistdiffgg$locus <- gsub("[.]c123[.]linsi_macse_NT", "", sistdiffgg$locus)
+
+sisdifggdn <- sistdiffgg[sistdiffgg$moldat == "dn",]
+sisdifggds <- sistdiffgg[sistdiffgg$moldat == "ds",]
+sisdifggdnds <- sistdiffgg[sistdiffgg$moldat == "dnds",]
+
+# Take median difference across pairs for each gene
+
+dnbyloc <- by(log(sisdifggdn$moldiff), sisdifggdn$locus, median, na.rm = T)
+dsbyloc <- by(log(sisdifggds$moldiff), sisdifggdn$locus, median, na.rm = T)
+dndsbyloc <- by(log(sisdifggdnds$moldiff), sisdifggdn$locus, median, na.rm = T)
+
+# Blast results ordered from high sistdiffs to low - ONLY 10% TOP AND BOTTOM OF RESULTS
+
+bstdntop10 <- blasts[names(dnbyloc)[order(dnbyloc, decreasing=T)]][1:round(length(dnbyloc)*0.1)]
+bstdstop10 <- blasts[names(dsbyloc)[order(dsbyloc, decreasing=T)]][1:round(length(dsbyloc)*0.1)]
+bstdndstop10 <- blasts[names(dndsbyloc)[order(dndsbyloc, decreasing=T)]][1:round(length(dndsbyloc)*0.1)]
+gnsdntop10 <- sapply(bstdntop10, function(x) gsub("[)].*|.*[(]", "", x))
+gnsdstop10 <- sapply(bstdstop10, function(x) gsub("[)].*|.*[(]", "", x))
+gnsdndstop10 <- sapply(bstdndstop10, function(x) gsub("[)].*|.*[(]", "", x))
+gnsdntop10 <- gnsdntop10[which(!is.na(gnsdntop10))]
+gnsdstop10 <- gnsdstop10[which(!is.na(gnsdstop10))]
+gnsdndstop10 <- gnsdndstop10[which(!is.na(gnsdndstop10))]
+writeLines(gnsdntop10, con = paste0("id_focal_four_categories/", names(colslist)[i], "_top_dn_10pc.txt"))
+writeLines(gnsdstop10, con = paste0("id_focal_four_categories/", names(colslist)[i], "_top_ds_10pc.txt"))
+writeLines(gnsdndstop10, con = paste0("id_focal_four_categories/", names(colslist)[i], "_top_dnds_10pc.txt"))
+
+bstdnbot10 <- blasts[names(dnbyloc)[order(dnbyloc, decreasing=F)]][1:round(length(dnbyloc)*0.1)]
+bstdsbot10 <- blasts[names(dsbyloc)[order(dsbyloc, decreasing=F)]][1:round(length(dsbyloc)*0.1)]
+bstdndsbot10 <- blasts[names(dndsbyloc)[order(dndsbyloc, decreasing=F)]][1:round(length(dndsbyloc)*0.1)]
+gnsdnbot10 <- sapply(bstdnbot10, function(x) gsub("[)].*|.*[(]", "", x))
+gnsdsbot10 <- sapply(bstdsbot10, function(x) gsub("[)].*|.*[(]", "", x))
+gnsdndsbot10 <- sapply(bstdndsbot10, function(x) gsub("[)].*|.*[(]", "", x))
+gnsdnbot10 <- gnsdnbot10[which(!is.na(gnsdnbot10))]
+gnsdsbot10 <- gnsdsbot10[which(!is.na(gnsdsbot10))]
+gnsdndsbot10 <- gnsdndsbot10[which(!is.na(gnsdndsbot10))]
+writeLines(gnsdnbot10, con = paste0("id_focal_four_categories/", names(colslist)[i], "_bot_dn_10pc.txt"))
+writeLines(gnsdsbot10, con = paste0("id_focal_four_categories/", names(colslist)[i], "_bot_ds_10pc.txt"))
+writeLines(gnsdndsbot10, con = paste0("id_focal_four_categories/", names(colslist)[i], "_bot_dnds_10pc.txt"))
+
+}
+

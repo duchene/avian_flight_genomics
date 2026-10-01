@@ -1,0 +1,178 @@
+library(phangorn)
+
+taxa <- c("Rhea_pennata", "Tinamus_guttatus", "Chauna_torquata", "Anas_platyrhynchos",
+  "Gallus_gallus", "Coturnix_japonica", "Meleagris_gallopavo", "Tympanuchus_cupido",
+  "Podilymbus_podiceps", "Podiceps_cristatus", "Mesitornis_unicolor", "Pterocles_gutturalis",
+  "Columba_livia", "Patagioenas_fasciata", "Tauraco_erythrolophus", "Corythaixoides_concolor",
+  "Lophotis_ruficrista", "Chlamydotis_macqueenii", "Geococcyx_californianus",
+  "Crotophaga_sulcirostris", "Ceuthmochares_aereus", "Cuculus_canorus",
+  "Antrostomus_carolinensis", "Chordeiles_acutipennis", "Hemiprocne_comata",
+  "Chaetura_pelagica", "Oreotrochilus_melanogaster", "Calypte_anna",
+  "Rhynochetos_jubatus", "Phaethon_lepturus", "Aptenodytes_forsteri",
+  "Pelecanoides_urinatrix", "Mesembrinibis_cayennensis", "Nipponia_nippon",
+  "Cochlearius_cochlearius", "Egretta_garzetta", "Scopus_umbretta", "Pelecanus_crispus",
+  "Phalacrocorax_harrisi", "Phalacrocorax_carbo", "Atlantisia_rogersi", "Heliornis_fulica",
+  "Psophia_crepitans", "Balearica_regulorum", "Charadrius_vociferus",
+  "Charadrius_alexandrinus", "Alca_torda", "Aquila_chrysaetos", "Haliaeetus_albicilla",
+  "Colius_striatus", "Urocolius_indicus", "Strix_occidentalis", "Tyto_alba",
+  "Trogon_melanurus", "Apaloderma_vittatum", "Bucorvus_abyssinicus", "Buceros_rhinoceros",
+  "Eurystomus_gularis", "Merops_nubicus", "Picoides_pubescens", "Indicator_maculatus",
+  "Cariama_cristata", "Chunga_burmeisteri", "Herpetotheres_cachinnans", "Falco_peregrinus",
+  "Nestor_notabilis", "Melopsittacus_undulatus", "Scytalopus_superciliaris",
+  "Campylorhamphus_procurvoides", "Manacus_manacus", "Lepidothrix_coronata",
+  "Menura_novaehollandiae", "Atrichornis_clamosus", "Orthonyx_spaldingii",
+  "Pomatostomus_ruficeps", "Aphelocoma_coerulescens", "Corvus_brachyrhynchos",
+  "Panurus_biarmicus", "Alaudala_cheleensis", "Taeniopygia_guttata", "Lonchura_striata",
+  "Geospiza_fortis", "Nesospiza_acunhae")
+
+
+# ---- 1. Load and prepare genome assembly data ----
+
+sampdat <- read.csv("../data/Feng_Table_1.csv", header = T, row.names = 1)
+sampdat$Latin.name <- gsub(" ", "_", sampdat$Latin.name)
+sampdat$Latin.name[which(sampdat$Latin.name == "Nannopterum_harrisi")] <- "Phalacrocorax_harrisi"
+sampdat$Contig_N50..bp. <- as.numeric(gsub(",", "", sampdat$Contig_N50..bp.))
+rownames(sampdat) <- sampdat$Latin.name
+
+tax <- read.csv("../data/taxonomy_codes.csv", header = T, row.names = 1)
+tax <- tax[taxa, ]
+sampdat <- sampdat[taxa, c(4:27)]
+sampdat <- cbind(tax, sampdat)
+
+
+# ---- 2. Great Auk imputation ----
+#
+# Row 47 (Pinguinus impennis) is missing from the assembly data.
+# Insert a row of NAs, fill in taxonomy and available sequence-derived metrics
+# (total aligned length, GC content, locus count, mean locus length),
+# then copy remaining assembly metrics from the razorbill (row 48, Alca torda).
+
+rawcompdat <- rbind(sampdat[1:46, ], rep(NA, ncol(sampdat)), sampdat[47:83, ])
+rownames(rawcompdat)[47] <- "Pinguinus_impennis"
+
+aukdat <- read.dna("../data/OUT-0003_gff_aln-q30_razorbill_v2_sort9_clean_greatAuk.fa",
+                   format = 'fasta')
+auklen     <- sum(sapply(aukdat, length), na.rm = T)
+aukgc      <- GC.content(aukdat) * 100
+aukNloc    <- length(aukdat)
+aukmeanlen <- mean(sapply(aukdat, length), na.rm = T)
+
+rawcompdat[47, ] <- c("Pinguinus_impennis", "PINIMP", "Charadriiformes", "Alcidae",
+                       "Pinguinus_impennis", NA, NA, NA, NA, NA, NA, auklen, NA, NA,
+                       NA, NA, NA, NA, NA, aukgc, NA, aukNloc, aukmeanlen,
+                       NA, NA, NA, NA, NA, NA)
+rawcompdat[47, which(is.na(rawcompdat[47, ]))] <- rawcompdat[48, which(is.na(rawcompdat[47, ]))]
+
+# Convert columns 6+ to numeric (they arrive as character due to comma formatting).
+for (i in 6:ncol(rawcompdat))
+  rawcompdat[, i] <- as.numeric(gsub(",", "", rawcompdat[, i]))
+
+
+# ---- 3. Assembly quality correction ----
+#
+# Correct genome metrics (columns 9-26) for assembly quality by regressing
+# each on log(Scaffold N50) and taking residuals + mean. This removes the
+# association between metric values and assembly contiguity.
+
+for (i in 9:26)
+  rawcompdat[, paste0(colnames(rawcompdat)[i], "_standScaf")] <-
+    residuals(lm(rawcompdat[, i] ~ log(rawcompdat$Scaffold_N50..bp.))) +
+    mean(rawcompdat[, i], na.rm = T)
+
+rownames(rawcompdat) <- rawcompdat$code
+
+
+# ---- 4. Compute pairwise ratios ----
+#
+# For each of the 42 sister pairs, compute the ratio (less-flying / more-flying)
+# for all numeric columns. Odd-indexed taxa are less-flying; even-indexed are more-flying.
+
+compdat <- matrix(NA, 42, ncol(rawcompdat) - 6)
+compnames <- vector()
+
+for (i in 1:42) {
+  compnames[i] <- paste0(rownames(rawcompdat)[(i * 2) - 1], "-", rownames(rawcompdat)[i * 2])
+  for (j in 1:(ncol(rawcompdat) - 6))
+    compdat[i, j] <- rawcompdat[(i * 2) - 1, j + 6] / rawcompdat[i * 2, j + 6]
+}
+
+comptypes <- c("FD", "SM", "DV", "DV", "VV", "DV", "SM", "VV", "SM", "DV",
+               "SM", "VV", "SM", "SM", "DV", "FV", "SM", "SM", "SM", "FV",
+               "FV", "DV", "VV", "FV", "VV", "VV", "VV", "VV", "VV", "SM",
+               "VV", "VV", "SM", "SM", "DV", "VV", "DD", "DV", "SM", "SM",
+               "VV", "VV")
+
+rownames(compdat) <- paste0(compnames, "-", comptypes)
+colnames(compdat) <- colnames(rawcompdat)[7:ncol(rawcompdat)]
+
+write.csv(compdat, file = "../data/genomic_comparisons_data.csv")
+
+
+# ---- 5. Binomial tests on pairwise ratios ----
+#
+# For each genome metric, test whether the ratio > 1 (less-flying sister has
+# larger value) more often than expected by chance, separately per category.
+# Column 58 (c_value) is skipped: all ratios are equal, causing binom.test to fail.
+
+tomstests <- list()
+for (i in c(1:57, 59:ncol(compdat))) {
+  tomstests[[i]] <- list(
+    similars = binom.test(
+      length(which(compdat[grepl("VV|DD", rownames(compdat)), i] > 1)),
+      sum(!is.na(compdat[grepl("VV|DD", rownames(compdat)), i]) &
+          compdat[grepl("VV|DD", rownames(compdat)), i] != 1)),
+    diffs = binom.test(
+      length(which(compdat[!grepl("VV|DD", rownames(compdat)), i] > 1)),
+      sum(!is.na(compdat[!grepl("VV|DD", rownames(compdat)), i]) &
+          compdat[!grepl("VV|DD", rownames(compdat)), i] != 1)),
+    SM = binom.test(
+      length(which(compdat[grepl("-SM", rownames(compdat)), i] > 1)),
+      sum(!is.na(compdat[grepl("-SM", rownames(compdat)), i]) &
+          compdat[grepl("-SM", rownames(compdat)), i] != 1)),
+    Fles = binom.test(
+      length(which(compdat[!grepl("VV|DD|-SM", rownames(compdat)), i] > 1)),
+      sum(!is.na(compdat[!grepl("VV|DD|-SM", rownames(compdat)), i]) &
+          compdat[!grepl("VV|DD|-SM", rownames(compdat)), i] != 1))
+  )
+}
+names(tomstests) <- colnames(compdat)
+
+restab <- do.call("rbind", lapply(tomstests, function(x)
+  as.numeric(sapply(x, function(y) c(y$parameter, round(y$p.value, 3))))))
+rownames(restab) <- names(tomstests)[-58]
+colnames(restab) <- as.character(sapply(names(tomstests[[1]]), function(x)
+  c(paste0(x, "_N"), paste0(x, "_pval"))))
+
+write.csv(restab[-grep("BUSCO|Depth|Contig|Scaffold", rownames(restab)), ],
+          file = "../data/genomic_twosidedTests.csv")
+
+
+# ---- 6. Exploratory barplots of pairwise ratios ----
+
+rawcompdat$comparison <- rep(rownames(compdat), each = 2)
+rawcompdat$flying <- c("flightless", "flying")
+rawcompdat$flycat <- as.character(sapply(rownames(compdat), function(x) {
+  cats <- c(substr(strsplit(x, "-")[[1]][3], 1, 1),
+            substr(strsplit(x, "-")[[1]][3], 2, 2))
+  if (cats[1] == cats[2]) cats[2] <- paste0(cats[1], "1")
+  return(cats)
+}))
+
+library(ggplot2)
+library(gridExtra)
+
+plotlist <- list()
+pdf("../figures/tomsHyp_1.pdf", width = 10, height = 4 * 16, useDingbats = F)
+for (i in c(45, 51, 53:62)) {
+  rawcompdat$comparison <- factor(rawcompdat$comparison,
+    levels = unique(rawcompdat$comparison)[order(rawcompdat[c(T, F), i] / rawcompdat[c(F, T), i])])
+  plotlist[[length(plotlist) + 1]] <- ggplot(rawcompdat,
+    aes_string(fill = "flying", y = colnames(rawcompdat)[i], x = "comparison")) +
+    geom_bar(position = "fill", stat = "identity") +
+    geom_abline(slope = 0, intercept = 0.5, col = "black", lty = 2) +
+    geom_text(aes_string(y = rep(c(0.75, 0.2), 42), label = colnames(rawcompdat)[i]),
+              angle = 90, color = "white", size = 2.5) +
+    theme(axis.text.x = element_text(angle = 90))
+}
+do.call("grid.arrange", c(plotlist, ncol = 1))
+dev.off()

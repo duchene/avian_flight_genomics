@@ -1,0 +1,35 @@
+library(phangorn)
+source("../functions/rtt.cov.R")
+source("../functions/pathnode.R")
+source("../functions/concatenate.R")
+
+sptr <- read.tree("../data/trauk.tre")
+
+trfiles <- grep("treefile", dir("postshrink_alignments/"), value = T)
+trs <- lapply(trfiles, function(x) read.tree(paste0("postshrink_alignments/", x)))
+names(trs) <- trfiles
+
+geneclcks <- sapply(trs, rtt.cov)
+genelens <- sapply(trs, function(x) log(sum(x$edge.length)))
+
+# Consider tree topology - so far with a very simple tree
+rawtrs <- lapply(gsub("[.]treefile", "", trfiles), function(x) try(NJ(dist.dna(read.dna(paste0("postshrink_alignments/", x), format = "fasta"), model = "GG95"))))
+trdist <- sapply(rawtrs, function(x) if(class(x) != "phylo") NA else RF.dist(x, drop.tip(sptr, sptr$tip.label[which(!sptr$tip.label %in% x$tip.label)]), normalize = T))
+
+clckquant <- quantile(geneclcks, probs = c(0.5), na.rm = T)
+lenquants <- quantile(genelens, probs = c(0.1, 0.9), na.rm = T)
+
+# The following has been run with the trees with distance < 0.75 leading to 4161 loci, or with trees with distance < 0.5 leading to 956 loci.
+# A further very aggressive filtering removded genes with clocks in the 0.25 quantile AND lengths between the 0.25 and 0.75 quantiles, tree distance < 0.5 from the species tree. This leads to 313 genes.
+goodlocsfiles <- gsub("[.]treefile", "", trfiles[which(geneclcks < clckquant & genelens > lenquants[1] & genelens < lenquants[2] & trdist < 0.75)])
+
+als <- lapply(goodlocsfiles, function(x) read.dna(paste0("postshrink_alignments/", x), format = "fasta"))
+alsC <- concatenate(als)
+rownames(alsC) <- paste0(rownames(alsC), "  ")
+alsC.1 <- alsC[, c(T,F,F)]
+alsC.2 <- alsC[, c(F,T,F)]
+alsC.3 <- alsC[, c(F,F,T)]
+write.dna(alsC.1, format = "sequential", nbcol = -1, colsep = "", file = "dating1/al.phy")
+write.dna(alsC.2, format = "sequential", nbcol = -1, colsep = "", file = "dating1/al.phy", append = T)
+write.dna(alsC.3, format = "sequential", nbcol = -1, colsep = "", file = "dating1/al.phy", append = T)
+

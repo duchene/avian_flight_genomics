@@ -1,0 +1,18 @@
+library(MASS)
+library(phangorn)
+source("../functions/trimLongTipBrs.R")
+
+loci <- grep("fasta$", dir("basic_alignments"), value = T)
+
+# Identify the excessively long tips from the IQTREE analysis. We fit an exponential distribution to branch lengths and consider that the 1% tail of the density as implausibly long.
+
+for(i in 1:length(loci)){
+	tr <- trimLongTipBrs(read.tree(paste0("basic_alignments/", loci[i], ".treefile")))
+	al <- read.dna(paste0("basic_alignments/", loci[i]), format = "fasta")
+	oldNtax <- nrow(al)
+	if(!all(rownames(al) %in% tr$tip.label)) al <- al[tr$tip.label,]
+	print(c(oldNtax, nrow(al)))
+	write.tree(tr, file = paste0("postshrink_alignments/", loci[i], ".treefile"))
+	write.dna(al, file = paste0("postshrink_alignments/", loci[i]), format = "fasta", nbcol = -1, colsep = "")
+	print(paste0("Wrote ", loci[i]))
+}

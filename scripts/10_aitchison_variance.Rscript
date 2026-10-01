@@ -1,0 +1,121 @@
+# Calculate Aitchison variance of base composition for all FASTA alignments
+# Aitchison variance is calculated using the centered log-ratio (clr) transformation
+# Optimized version for large datasets
+
+library(ape)
+
+# Function to calculate base composition for a sequence (excluding gaps).
+get_base_composition <- function(seq) {
+  seq <- toupper(seq)
+  seq <- gsub("[^ACGT]", "", seq)
+
+  if(nchar(seq) == 0) return(NULL)
+
+  counts <- c(
+    A = nchar(gsub("[^A]", "", seq)),
+    C = nchar(gsub("[^C]", "", seq)),
+    G = nchar(gsub("[^G]", "", seq)),
+    T = nchar(gsub("[^T]", "", seq))
+  )
+  
+  # Add small pseudocount to avoid log(0)
+  counts <- counts + 0.5
+  
+  # Convert to proportions
+  props <- counts / sum(counts)
+  return(as.numeric(props))
+}
+
+# Calculate Aitchison variance for a composition matrix.
+# Each row is a taxon, each column is a nucleotide (A, C, G, T).
+aitchison_variance <- function(comp_matrix) {
+  # CLR transformation: log(x) - mean(log(x)) for each row
+  log_mat <- log(comp_matrix)
+  row_means <- rowMeans(log_mat)
+  clr_matrix <- log_mat - row_means
+  
+  # Calculate total variance (sum of component variances)
+  total_var <- sum(apply(clr_matrix, 2, var))
+  
+  return(total_var)
+}
+
+# Get all FASTA files.
+# NOTE: c123 is a large external directory not included in the repository.
+alignment_dir <- "~/Desktop/Research/auk/c123"
+alignment_dir <- path.expand(alignment_dir)
+fasta_files <- list.files(alignment_dir, pattern = "\\.fa$", full.names = TRUE)
+
+n_files <- length(fasta_files)
+cat("Found", n_files, "FASTA files\n")
+
+# Pre-allocate results vectors (much faster than growing data frame)
+locus_vec <- character(n_files)
+n_taxa_vec <- integer(n_files)
+aitchison_var_vec <- numeric(n_files)
+valid_idx <- logical(n_files)
+
+cat("Processing alignments...\n")
+pb <- txtProgressBar(min = 0, max = n_files, style = 3)
+
+for(i in seq_len(n_files)) {
+  if(i %% 100 == 0) setTxtProgressBar(pb, i)
+  
+  fasta_file <- fasta_files[i]
+  locus_name <- gsub("\\.fa$", "", basename(fasta_file))
+  
+  # Read alignment
+  tryCatch({
+    aln <- read.FASTA(fasta_file, type = "DNA")
+    
+    # Get sequences as character strings
+    seqs <- sapply(as.character(aln), paste, collapse = "")
+    
+    # Calculate base composition for each taxon
+    compositions <- lapply(seqs, get_base_composition)
+    
+    # Remove any NULL entries (sequences that were all gaps/Ns)
+    compositions <- compositions[!sapply(compositions, is.null)]
+    
+    if(length(compositions) >= 3) {  # Need at least 3 taxa for variance
+      comp_matrix <- do.call(rbind, compositions)
+      
+      # Calculate Aitchison variance
+      ait_var <- aitchison_variance(comp_matrix)
+      
+      locus_vec[i] <- locus_name
+      n_taxa_vec[i] <- length(compositions)
+      aitchison_var_vec[i] <- ait_var
+      valid_idx[i] <- TRUE
+    }
+  }, error = function(e) {
+    # Skip problematic files
+  })
+}
+
+close(pb)
+
+# Filter to valid results only
+results <- data.frame(
+  locus = locus_vec[valid_idx],
+  n_taxa = n_taxa_vec[valid_idx],
+  aitchison_var = aitchison_var_vec[valid_idx],
+  stringsAsFactors = FALSE
+)
+
+cat("\nProcessed", nrow(results), "alignments successfully\n")
+
+# Summary statistics
+cat("\n=== Summary of Aitchison Variance ===\n")
+cat("Mean:", round(mean(results$aitchison_var), 6), "\n")
+cat("Median:", round(median(results$aitchison_var), 6), "\n")
+cat("SD:", round(sd(results$aitchison_var), 6), "\n")
+cat("Min:", round(min(results$aitchison_var), 6), "\n")
+cat("Max:", round(max(results$aitchison_var), 6), "\n")
+
+# Save results
+write.csv(results, "../data/aitchison_variance_results.csv", row.names = FALSE)
+cat("\nResults saved to: ../data/aitchison_variance_results.csv\n")
+
+saveRDS(results, "../data/aitchison_variance_results.rds")
+cat("RDS file saved to: ../data/aitchison_variance_results.rds\n")

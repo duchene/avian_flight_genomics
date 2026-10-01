@@ -1,0 +1,425 @@
+# Permutation-based calibration of KS tests for per-gene p-value distributions.
+#
+# Shuffles flight-category labels across the 42 sister pairs, recomputes
+# per-gene binomial test p-values, and builds pointwise null CDF envelopes.
+# These envelopes account for discreteness of binomial p-values (small N),
+# correlation across genes sharing the same pairs, and the fixed study design
+# (group sizes preserved by permutation).
+#
+# Loads results from scripts 5 and 9; no model fitting required.
+
+library(ggplot2)
+
+set.seed(42)
+n_perm <- 1000
+
+# ---- 1. Load data ----
+
+load("../data/dnds_sisdifs_vol.Rdata")   # sisdifggds, sisdifggdn, sisdifggdnds
+load("../data/p_values_per_locus.Rdata")  # pvalsperloc
+
+trnames <- rownames(pvalsperloc)
+n_loci  <- length(trnames)
+
+# ---- 2. Pair identities and flight categories ----
+
+pair_info <- unique(sisdifggds[, c("comparison", "comptype")])
+pair_info <- pair_info[!duplicated(pair_info$comparison), ]
+pair_info <- pair_info[order(as.character(pair_info$comparison)), ]
+pair_names <- as.character(pair_info$comparison)
+orig_types <- as.character(pair_info$comptype)
+n_pairs    <- length(pair_names)
+
+n_similar <- sum(orig_types %in% c("VV", "DD"))
+n_sm      <- sum(orig_types == "SM")
+n_fless   <- sum(!orig_types %in% c("VV", "DD", "SM"))
+cat(sprintf("Pairs: %d (similar=%d, SM=%d, fless=%d)\n",
+            n_pairs, n_similar, n_sm, n_fless))
+cat("Loci: ", n_loci, "\n")
+
+# ---- 3. Reshape to locus x pair matrices ----
+
+reshape_wide <- function(df, pair_names, trnames) {
+  locus <- as.character(df$locus)
+  comp  <- as.character(df$comparison)
+  md    <- as.numeric(df$moldiff)
+  ri <- match(locus, trnames)
+  ci <- match(comp, pair_names)
+  ok <- !is.na(ri) & !is.na(ci)
+  mat <- matrix(NA_real_, length(trnames), length(pair_names))
+  mat[cbind(ri[ok], ci[ok])] <- md[ok]
+  mat
+}
+
+md_ds   <- reshape_wide(sisdifggds, pair_names, trnames)
+md_dn   <- reshape_wide(sisdifggdn, pair_names, trnames)
+md_dnds <- reshape_wide(sisdifggdnds, pair_names, trnames)
+
+accel_ds   <- md_ds > 1;      valid_ds   <- !is.na(md_ds)
+accel_dn   <- md_dn > 1;      valid_dn   <- !is.na(md_dn)
+accel_dnds <- md_dnds > 1;    valid_dnds <- !is.na(md_dnds)
+
+# ---- 4. Helpers ----
+
+# Vectorised binomial p-values for all loci simultaneously.
+# Returns list(accel, decel) — each a numeric vector of length n_loci.
+binom_pvals <- function(accel_mat, valid_mat, cols) {
+  if (length(cols) == 1) {
+    k <- as.integer(accel_mat[, cols] & valid_mat[, cols])
+    n <- as.integer(valid_mat[, cols])
+  } else {
+    k <- rowSums(accel_mat[, cols], na.rm = TRUE)
+    n <- rowSums(valid_mat[, cols])
+  }
+  bad <- n < 9
+  pa <- pbinom(k - 1, n, 0.5, lower.tail = FALSE)   # alt = "greater"
+  pd <- pbinom(k, n, 0.5)                            # alt = "less"
+  pa[bad] <- NA; pd[bad] <- NA
+  list(accel = pa, decel = pd)
+}
+
+# One-sided KS D+ statistic: max(F_n(x) - F_0(x)) where F_0 = uniform
+ks_Dplus <- function(x) {
+  x <- x[!is.na(x)]
+  n <- length(x)
+  if (n < 2) return(NA_real_)
+  max((1:n) / n - sort(x))
+}
+
+# Two-sided KS D statistic: max(|F_n(x) - F_0(x)|)
+ks_D <- function(x) {
+  x <- x[!is.na(x)]
+  n <- length(x)
+  if (n < 2) return(NA_real_)
+  xs <- sort(x)
+  d_plus  <- max((1:n) / n - xs)
+  d_minus <- max(xs - (0:(n - 1)) / n)
+  max(d_plus, d_minus)
+}
+
+# ---- 5. Map panel keys to pvalsperloc columns ----
+
+col_map <- c(
+  ds_similar_Accel   = 1,  ds_similar_Decel   = 2,
+  ds_sm_Accel        = 5,  ds_sm_Decel        = 6,
+  ds_fless_Accel     = 7,  ds_fless_Decel     = 8,
+  dn_similar_Accel   = 9,  dn_similar_Decel   = 10,
+  dn_sm_Accel        = 13, dn_sm_Decel        = 14,
+  dn_fless_Accel     = 15, dn_fless_Decel     = 16,
+  dnds_similar_Accel = 17, dnds_similar_Decel = 18,
+  dnds_sm_Accel      = 21, dnds_sm_Decel      = 22,
+  dnds_fless_Accel   = 23, dnds_fless_Decel   = 24
+)
+
+keys     <- names(col_map)
+obs_Dp   <- sapply(keys, function(k) ks_Dplus(pvalsperloc[, col_map[k]]))
+obs_D2   <- sapply(keys, function(k) ks_D(pvalsperloc[, col_map[k]]))
+
+# ---- 6. Permutation loop ----
+
+cat(sprintf("Running %d permutations...\n", n_perm))
+
+grid_pts <- seq(0, 1, length.out = 501)
+perm_Dp  <- matrix(NA_real_, n_perm, length(keys))
+perm_D2  <- matrix(NA_real_, n_perm, length(keys))
+colnames(perm_Dp) <- colnames(perm_D2) <- keys
+
+cdf_store <- lapply(keys, function(k) matrix(NA_real_, length(grid_pts), n_perm))
+names(cdf_store) <- keys
+
+pb <- txtProgressBar(min = 0, max = n_perm, style = 3)
+
+for (p_idx in seq_len(n_perm)) {
+  setTxtProgressBar(pb, p_idx)
+
+  pt    <- sample(orig_types)
+  c_sim <- which(pt %in% c("VV", "DD"))
+  c_sm  <- which(pt == "SM")
+  c_fl  <- which(!pt %in% c("VV", "DD", "SM"))
+
+  for (rate in c("ds", "dn", "dnds")) {
+    am <- switch(rate, ds = accel_ds, dn = accel_dn, dnds = accel_dnds)
+    vm <- switch(rate, ds = valid_ds, dn = valid_dn, dnds = valid_dnds)
+
+    pv <- list(
+      similar = binom_pvals(am, vm, c_sim),
+      sm      = binom_pvals(am, vm, c_sm),
+      fless   = binom_pvals(am, vm, c_fl)
+    )
+
+    for (cat_nm in c("similar", "sm", "fless")) {
+      for (dir in c("Accel", "Decel")) {
+        key  <- paste(rate, cat_nm, dir, sep = "_")
+        vals <- pv[[cat_nm]][[tolower(dir)]]
+
+        perm_Dp[p_idx, key] <- ks_Dplus(vals)
+        perm_D2[p_idx, key] <- ks_D(vals)
+
+        v_clean <- vals[!is.na(vals)]
+        if (length(v_clean) >= 2) {
+          cdf_store[[key]][, p_idx] <- ecdf(v_clean)(grid_pts)
+        }
+      }
+    }
+  }
+}
+close(pb)
+
+# ---- 7. Permutation p-values ----
+
+perm_p_Dp <- sapply(keys, function(k) {
+  (sum(perm_Dp[, k] >= obs_Dp[k], na.rm = TRUE) + 1) / (n_perm + 1)
+})
+perm_p_D2 <- sapply(keys, function(k) {
+  (sum(perm_D2[, k] >= obs_D2[k], na.rm = TRUE) + 1) / (n_perm + 1)
+})
+
+parse_key <- function(k) {
+  parts <- strsplit(k, "_")[[1]]
+  data.frame(rate = parts[1], category = parts[2], direction = parts[3],
+             stringsAsFactors = FALSE)
+}
+
+res_tab <- do.call(rbind, lapply(keys, parse_key))
+res_tab$D_plus     <- round(obs_Dp, 4)
+res_tab$perm_p_Dp  <- round(perm_p_Dp, 4)
+res_tab$D_twosided <- round(obs_D2, 4)
+res_tab$perm_p_D   <- round(perm_p_D2, 4)
+rownames(res_tab) <- NULL
+
+cat("\n\n=== KS statistics and permutation p-values ===\n")
+cat("D+ = one-sided (excess small p-values); D = two-sided (any departure)\n\n")
+print(res_tab, right = FALSE)
+
+sig_Dp <- sum(res_tab$perm_p_Dp < 0.05)
+sig_D2 <- sum(res_tab$perm_p_D < 0.05)
+cat(sprintf("\nOne-sided D+: %d / %d significant at alpha = 0.05\n", sig_Dp, nrow(res_tab)))
+cat(sprintf("Two-sided D:  %d / %d significant at alpha = 0.05\n", sig_D2, nrow(res_tab)))
+
+# ---- 8. CDF envelopes (pointwise 2.5th / 97.5th percentiles) ----
+
+env_list <- lapply(keys, function(k) {
+  mat <- cdf_store[[k]]
+  data.frame(
+    x  = grid_pts,
+    lo = apply(mat, 1, quantile, probs = 0.025, na.rm = TRUE),
+    hi = apply(mat, 1, quantile, probs = 0.975, na.rm = TRUE)
+  )
+})
+names(env_list) <- keys
+
+# ---- 9. Build ggplot2 figure ----
+
+# Observed p-values (raw, for stat_ecdf)
+obs_raw <- do.call(rbind, lapply(keys, function(k) {
+  pv <- pvalsperloc[, col_map[k]]
+  pv <- pv[!is.na(pv)]
+  pk <- parse_key(k)
+  data.frame(pval = pv, rate = pk$rate, category = pk$category,
+             direction = pk$direction, stringsAsFactors = FALSE)
+}))
+
+# Envelope data
+env_df <- do.call(rbind, lapply(keys, function(k) {
+  e  <- env_list[[k]]
+  pk <- parse_key(k)
+  data.frame(x = e$x, lo = e$lo, hi = e$hi,
+             rate = pk$rate, category = pk$category,
+             direction = pk$direction, stringsAsFactors = FALSE)
+}))
+
+# Factor levels (Decel on top to match original Figure 1 layout)
+rate_lev <- c("ds", "dn", "dnds")
+rate_lab <- c(ds = "dS", dn = "dN", dnds = "dN/dS")
+cat_lev  <- c("fless", "similar", "sm")
+cat_lab  <- c(fless = "Flight-loss", similar = "Minimal change", sm = "Sedentary-Migratory")
+dir_lev  <- c("Decel", "Accel")
+dir_lab  <- c(Decel = "Deceleration", Accel = "Acceleration")
+
+obs_raw$rate      <- factor(obs_raw$rate,      levels = rate_lev, labels = rate_lab)
+obs_raw$category  <- factor(obs_raw$category,  levels = cat_lev,  labels = cat_lab)
+obs_raw$direction <- factor(obs_raw$direction, levels = dir_lev,  labels = dir_lab)
+
+env_df$rate      <- factor(env_df$rate,      levels = rate_lev, labels = rate_lab)
+env_df$category  <- factor(env_df$category,  levels = cat_lev,  labels = cat_lab)
+env_df$direction <- factor(env_df$direction, levels = dir_lev,  labels = dir_lab)
+
+cat_colours <- c("Flight-loss"         = "#3c1b4d",
+                 "Minimal change"      = "#90d743",
+                 "Sedentary-Migratory" = "#DAA520")   # darker gold for visibility
+
+# Annotations: two-sided permutation p-values per category per panel
+annot_df <- do.call(rbind, lapply(keys, function(k) {
+  pk <- parse_key(k)
+  data.frame(rate = pk$rate, category = pk$category, direction = pk$direction,
+             label = sprintf("p = %.3f", perm_p_D2[k]),
+             sig   = perm_p_D2[k] < 0.05,
+             stringsAsFactors = FALSE)
+}))
+annot_df$rate      <- factor(annot_df$rate,      levels = rate_lev, labels = rate_lab)
+annot_df$category  <- factor(annot_df$category,  levels = cat_lev,  labels = cat_lab)
+annot_df$direction <- factor(annot_df$direction, levels = dir_lev,  labels = dir_lab)
+
+# Position annotations vertically, stacked per category
+annot_df$y_pos <- as.numeric(annot_df$category) * 0.07 + 0.72
+
+fig <- ggplot() +
+  geom_ribbon(data = env_df,
+              aes(x = x, ymin = lo, ymax = hi, fill = category),
+              alpha = 0.2) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", colour = "grey50") +
+  stat_ecdf(data = obs_raw,
+            aes(x = pval, colour = category),
+            geom = "step", linewidth = 0.6) +
+  geom_text(data = annot_df,
+            aes(x = 0.02, y = y_pos, label = label, colour = category),
+            hjust = 0, size = 2.8, show.legend = FALSE) +
+  scale_colour_manual(values = cat_colours, name = "Observed CDF") +
+  scale_fill_manual(values = cat_colours, name = "95% null envelope") +
+  guides(colour = guide_legend(order = 1),
+         fill   = guide_legend(order = 2, override.aes = list(alpha = 0.3))) +
+  facet_grid(direction ~ rate) +
+  labs(x = "Binomial test p-value",
+       y = "Cumulative proportion",
+       caption = "Permutation null: 1,000 shuffles of flight-category labels across 42 sister pairs") +
+  theme_bw(base_size = 11) +
+  theme(strip.background = element_rect(fill = "grey95"),
+        legend.position = "bottom",
+        legend.box = "horizontal",
+        panel.grid.minor = element_blank())
+
+pdf("../figures/Fig_S_ks_permutation_envelopes.pdf", width = 9, height = 6,
+    useDingbats = FALSE)
+print(fig)
+dev.off()
+cat("\nFigure saved: ../figures/Fig_S_ks_permutation_envelopes.pdf\n")
+
+# ---- 10. Forest plot: observed KS D vs permutation null ----
+
+null_summ <- do.call(rbind, lapply(keys, function(k) {
+  pk <- parse_key(k)
+  d_null <- perm_D2[, k]
+  data.frame(
+    rate = pk$rate, category = pk$category, direction = pk$direction,
+    obs = obs_D2[k],
+    null_med = median(d_null, na.rm = TRUE),
+    null_lo  = quantile(d_null, 0.025, na.rm = TRUE),
+    null_hi  = quantile(d_null, 0.975, na.rm = TRUE),
+    null_q25 = quantile(d_null, 0.25,  na.rm = TRUE),
+    null_q75 = quantile(d_null, 0.75,  na.rm = TRUE),
+    sig = perm_p_D2[k] < 0.05,
+    stringsAsFactors = FALSE
+  )
+}))
+rownames(null_summ) <- NULL
+
+null_summ$label <- paste0(
+  ifelse(null_summ$category == "fless", "Flight-loss",
+  ifelse(null_summ$category == "similar", "Min. change", "Sed.-Mig.")),
+  " (", tolower(null_summ$direction), ")")
+
+null_summ$rate <- factor(null_summ$rate, levels = c("ds", "dn", "dnds"),
+                         labels = c("dS", "dN", "dN/dS"))
+null_summ$label <- factor(null_summ$label,
+                          levels = rev(unique(null_summ$label)))
+
+fig_forest <- ggplot(null_summ, aes(y = label)) +
+  geom_linerange(aes(xmin = null_lo, xmax = null_hi),
+                 colour = "grey75", linewidth = 0.5) +
+  geom_linerange(aes(xmin = null_q25, xmax = null_q75),
+                 colour = "grey55", linewidth = 1.5) +
+  geom_point(aes(x = null_med), colour = "grey55", size = 1.5) +
+  geom_point(aes(x = obs, colour = sig), size = 2.5) +
+  scale_colour_manual(values = c(`TRUE` = "firebrick", `FALSE` = "grey30"),
+                      labels = c("Not significant", "p < 0.05"),
+                      name = "Permutation test") +
+  facet_wrap(~ rate, nrow = 1) +
+  labs(x = "Two-sided KS D statistic",
+       y = NULL,
+       title = "Observed KS D vs permutation null (95% and 50% CI)") +
+  theme_bw(base_size = 11) +
+  theme(strip.background = element_rect(fill = "grey95"),
+        legend.position = "bottom",
+        panel.grid.major.y = element_blank())
+
+pdf("../figures/Fig_S_ks_D_forest.pdf", width = 9, height = 4,
+    useDingbats = FALSE)
+print(fig_forest)
+dev.off()
+cat("Figure saved: ../figures/Fig_S_ks_D_forest.pdf\n")
+
+# ---- 11. Base-R version of Figure 1 with permutation envelopes ----
+# Matches the original layout from 09_binomtests.Rscript for direct comparison.
+
+line_cols <- c(fless = "#3c1b4dff", similar = "#90d743ff", sm = "#DAA520ff")
+cat_labels_short <- c(fless = "Flight-loss", similar = "Min. change", sm = "Sed.-Mig.")
+
+pdf("../figures/Fig_1_with_envelopes.pdf", height = 6, width = 8,
+    useDingbats = FALSE)
+par(mfrow = c(2, 3), mar = c(4, 4, 2.5, 1))
+
+# Top row: decel; bottom row: accel
+panel_order <- list(
+  list(dir = "Decel", rate = "ds"),
+  list(dir = "Decel", rate = "dn"),
+  list(dir = "Decel", rate = "dnds"),
+  list(dir = "Accel", rate = "ds"),
+  list(dir = "Accel", rate = "dn"),
+  list(dir = "Accel", rate = "dnds")
+)
+rate_titles <- c(ds = "dS", dn = "dN", dnds = "dN/dS")
+dir_titles  <- c(Decel = "deceleration", Accel = "acceleration")
+
+for (pan in panel_order) {
+  dir  <- pan$dir
+  rate <- pan$rate
+  main_title <- paste0(rate_titles[rate], " - ", dir_titles[dir])
+
+  plot(0, 0, type = "n", xlim = c(0, 1), ylim = c(0, 1),
+       xlab = "Binomial test p-value", ylab = "Cumulative proportion",
+       main = main_title, cex.main = 0.9)
+  abline(0, 1, lty = 2, col = "grey50")
+
+  for (cat_nm in c("fless", "similar", "sm")) {
+    key <- paste(rate, cat_nm, dir, sep = "_")
+    env <- env_list[[key]]
+
+    # Envelope shading
+    polygon(c(env$x, rev(env$x)), c(env$lo, rev(env$hi)),
+            col = adjustcolor(line_cols[cat_nm], alpha.f = 0.15),
+            border = NA)
+
+    # Observed ECDF
+    pv <- pvalsperloc[, col_map[key]]
+    pv <- pv[!is.na(pv)]
+    lines(ecdf(pv), col = line_cols[cat_nm], lwd = 1.5, do.points = FALSE)
+  }
+
+  # Legend: observed CDF lines with D and p-values
+  leg_text <- sapply(c("fless", "similar", "sm"), function(cat_nm) {
+    key <- paste(rate, cat_nm, dir, sep = "_")
+    sprintf("D=%.2f, p=%.3f", obs_D2[key], perm_p_D2[key])
+  })
+  legend("topleft",
+         col = line_cols[c("fless", "similar", "sm")],
+         lwd = 2, cex = 0.6, bty = "n",
+         legend = paste(cat_labels_short[c("fless", "similar", "sm")],
+                        leg_text))
+
+  # Legend: envelope explanation
+  legend("bottomright",
+         fill = adjustcolor("grey50", alpha.f = 0.25),
+         border = "grey60", cex = 0.6, bty = "n",
+         legend = "95% permutation null")
+}
+dev.off()
+cat("Figure saved: ../figures/Fig_1_with_envelopes.pdf\n")
+
+# ---- 12. Save results ----
+
+save(perm_Dp, perm_D2, obs_Dp, obs_D2, perm_p_Dp, perm_p_D2,
+     env_list, grid_pts, res_tab,
+     file = "../data/ks_permutation_results.Rdata")
+write.csv(res_tab, "../data/ks_permutation_pvalues.csv", row.names = FALSE)
+cat("Results saved: ../data/ks_permutation_results.Rdata\n")
+cat("Table saved:   ../data/ks_permutation_pvalues.csv\n")

@@ -1,0 +1,163 @@
+library(phangorn)
+
+trnames <- gsub("_dS[.]tre", "", grep("dS", dir("dnds_analyses"), value = T))
+
+# Create data matrix with loci as rows and species names as columns
+
+dnres <- dsres <- olres <- matrix(NA, length(trnames), 84)
+rownames(dnres) <- rownames(dsres) <- rownames(olres) <- trnames
+taxa <- c("Rhea_pennata",
+"Tinamus_guttatus",
+"Chauna_torquata",
+"Anas_platyrhynchos",
+"Gallus_gallus",
+"Coturnix_japonica",
+"Meleagris_gallopavo",
+"Tympanuchus_cupido",
+"Podilymbus_podiceps",
+"Podiceps_cristatus",
+"Mesitornis_unicolor",
+"Pterocles_gutturalis",
+"Columba_livia",
+"Patagioenas_fasciata",
+"Tauraco_erythrolophus",
+"Corythaixoides_concolor",
+"Lophotis_ruficrista",
+"Chlamydotis_macqueenii",
+"Geococcyx_californianus",
+"Crotophaga_sulcirostris",
+"Ceuthmochares_aereus",
+"Cuculus_canorus",
+"Antrostomus_carolinensis",
+"Chordeiles_acutipennis",
+"Hemiprocne_comata",
+"Chaetura_pelagica",
+"Oreotrochilus_melanogaster",
+"Calypte_anna",
+"Rhynochetos_jubatus",
+"Phaethon_lepturus",
+"Aptenodytes_forsteri",
+"Pelecanoides_urinatrix",
+"Mesembrinibis_cayennensis",
+"Nipponia_nippon",
+"Cochlearius_cochlearius",
+"Egretta_garzetta",
+"Scopus_umbretta",
+"Pelecanus_crispus",
+"Phalacrocorax_harrisi",
+"Phalacrocorax_carbo",
+"Atlantisia_rogersi",
+"Heliornis_fulica",
+"Psophia_crepitans",
+"Balearica_regulorum",
+"Charadrius_vociferus",
+"Charadrius_alexandrinus",
+"Alca_torda",
+"Aquila_chrysaetos",
+"Haliaeetus_albicilla",
+"Colius_striatus",
+"Urocolius_indicus",
+"Strix_occidentalis",
+"Tyto_alba",
+"Trogon_melanurus",
+"Apaloderma_vittatum",
+"Bucorvus_abyssinicus",
+"Buceros_rhinoceros",
+"Eurystomus_gularis",
+"Merops_nubicus",
+"Picoides_pubescens",
+"Indicator_maculatus",
+"Cariama_cristata",
+"Chunga_burmeisteri",
+"Herpetotheres_cachinnans",
+"Falco_peregrinus",
+"Nestor_notabilis",
+"Melopsittacus_undulatus",
+"Scytalopus_superciliaris",
+"Campylorhamphus_procurvoides",
+"Manacus_manacus",
+"Lepidothrix_coronata",
+"Menura_novaehollandiae",
+"Atrichornis_clamosus",
+"Orthonyx_spaldingii",
+"Pomatostomus_ruficeps",
+"Aphelocoma_coerulescens",
+"Corvus_brachyrhynchos",
+"Panurus_biarmicus",
+"Alaudala_cheleensis",
+"Taeniopygia_guttata",
+"Lonchura_striata",
+"Geospiza_fortis",
+"Nesospiza_acunhae")
+tax <- read.csv("../data/taxonomy_codes.csv", header = T, row.names = 1)
+tax <- tax[taxa,]
+colnames(dnres) <- colnames(dsres) <- colnames(olres) <- c(tax$code[1:46], "PINIMP", tax$code[47:83])
+
+# Read trees and extract dn, ds, and overall (ol) raw lengths, and calculate dnds
+
+for(i in 1:length(trnames)){
+	dntr <- read.tree(paste0("dnds_analyses/", trnames[i], "_dN.tre"))
+	tiplens <- dntr$edge.length[dntr$edge[,2] %in% 1:Ntip(dntr)]
+	names(tiplens) <- dntr$tip.label[dntr$edge[dntr$edge[,2] %in% 1:Ntip(dntr),2]]
+	dnres[i,colnames(dnres) %in% names(tiplens)] <- tiplens[colnames(dnres)[colnames(dnres) %in% names(tiplens)]]
+	
+	dstr <- read.tree(paste0("dnds_analyses/", trnames[i], "_dS.tre"))
+	tiplens <- dstr$edge.length[dstr$edge[,2] %in% 1:Ntip(dstr)]
+        names(tiplens) <- dstr$tip.label[dstr$edge[dstr$edge[,2] %in% 1:Ntip(dstr),2]]
+        dsres[i,colnames(dsres) %in% names(tiplens)] <- tiplens[colnames(dsres)[colnames(dsres) %in% names(tiplens)]]
+	
+	oltr <- read.tree(paste0("postshrink_alignments/", trnames[i], ".fasta.treefile"))
+	tiplens <- oltr$edge.length[oltr$edge[,2] %in% 1:Ntip(oltr)]
+        names(tiplens) <- oltr$tip.label[oltr$edge[oltr$edge[,2] %in% 1:Ntip(oltr),2]]
+        olres[i,colnames(olres) %in% names(tiplens)] <- tiplens[colnames(olres)[colnames(olres) %in% names(tiplens)]]
+}
+
+dndsres <- dnres / dsres
+
+# Excluding extremely small values, which are difficult to infer and therefore likely unreliable
+
+dnres[dnres < 0.0001 | dnres > 2] <- NA
+dsres[dsres < 0.0001 | dsres > 2] <- NA
+dndsres[dndsres < 0.001 | dndsres > 5] <- NA
+olres[olres < 0.0001 | olres > 2] <- NA
+
+save(dnres, dsres, dndsres, olres, file = "../data/dnds_branches.Rdata")
+
+# Create matrix where columns are the ratio among taxa by flight habit (less / more flight intensive). See exact order defined at the start of this file
+
+sistdiff <- matrix(NA, length(trnames), (84/2)*4)
+rownames(sistdiff) <- trnames
+colnames(sistdiff) <- as.character(sapply(seq(1, 83, 2), function(x) paste(colnames(dnres)[x], colnames(dnres)[x+1], c("dn", "ds", "dnds", "ol"), sep = "-")), 30)
+
+for(i in 1:length(trnames)){
+	for(j in 1:42){
+		sistdiff[i, (seq(1, 167, 4)[j]):((seq(1, 167, 4)[j])+3)] <- c(dnres[i, seq(1, 83, 2)[j]] / dnres[i, seq(1, 83, 2)[j]+1], dsres[i, seq(1, 83, 2)[j]] / dsres[i, seq(1, 83, 2)[j]+1], dndsres[i, seq(1, 83, 2)[j]] / dndsres[i, seq(1, 83, 2)[j]+1], olres[i, seq(1, 83, 2)[j]] / olres[i, seq(1, 83, 2)[j]+1])
+	}
+}
+
+# F = flightless, N = near-flightless, D = degenerate, V = volant, SM = sedentary-migratory distinction
+# Note order also includes sedentary / migratory, and comparisons are ordered for each type of molecular data
+
+library(reshape2)
+
+comptypes <- c("FD", "SM", "DV", "DV", "VV", "DV", "SM", "VV", "SM", "DV", "SM", "VV", "SM", "SM", "DV", "FV", "SM", "SM", "SM", "FV", "FV", "DV", "VV", "FV", "VV", "VV", "VV", "VV", "VV", "SM", "VV", "VV", "SM", "SM", "DV", "VV", "DD", "DV", "SM", "SM", "VV", "VV")
+
+colnames(sistdiff) <- paste(colnames(sistdiff), rep(comptypes, each = 4), sep = "-")
+
+sistdiffgg <- melt(sistdiff)
+sistdiffgg <- cbind(sistdiffgg, do.call("rbind", strsplit(as.character(sistdiffgg[,2]), "-")))
+sistdiffgg[,2] <- sapply(as.character(sistdiffgg[,2]), function(x) paste0(strsplit(x, split = "-")[[1]][1:2], collapse = "-"))
+colnames(sistdiffgg) <- c("locus", "comparison", "moldiff", "sp1", "sp2", "moldat", "comptype")
+
+sisdifggdn <- sistdiffgg[sistdiffgg$moldat == "dn",]
+sisdifggds <- sistdiffgg[sistdiffgg$moldat == "ds",]
+sisdifggdnds <- sistdiffgg[sistdiffgg$moldat == "dnds",]
+sisdifggol <- sistdiffgg[sistdiffgg$moldat == "ol",]
+
+sisdifggdn$comparison <- factor(sisdifggdn$comparison, levels = names(by(sisdifggdn$moldiff, sisdifggdn$comparison, median, na.rm = T))[order(by(sisdifggdn$moldiff, sisdifggdn$comparison, median, na.rm = T), decreasing = T)])
+sisdifggds$comparison <- factor(sisdifggds$comparison, levels = names(by(sisdifggds$moldiff, sisdifggds$comparison, median, na.rm = T))[order(by(sisdifggds$moldiff, sisdifggds$comparison, median, na.rm = T), decreasing = T)])
+sisdifggdnds$comparison <- factor(sisdifggdnds$comparison, levels = names(by(sisdifggdnds$moldiff, sisdifggdnds$comparison, median, na.rm = T))[order(by(sisdifggdnds$moldiff, sisdifggdnds$comparison, median, na.rm = T), decreasing = T)])
+sisdifggol$comparison <- factor(sisdifggol$comparison, levels = names(by(sisdifggol$moldiff, sisdifggol$comparison, median, na.rm = T))[order(by(sisdifggol$moldiff, sisdifggol$comparison, median, na.rm = T), decreasing = T)])
+
+save(sisdifggdn, sisdifggds, sisdifggdnds, sisdifggol, file = "../data/dnds_sisdifs_vol.Rdata")
+

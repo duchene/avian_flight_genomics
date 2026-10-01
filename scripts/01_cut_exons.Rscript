@@ -1,0 +1,117 @@
+library(phangorn)
+
+# Identify all B10K loci (coding regions) and taxa (sister pairs) to be used.
+
+loci <- grep("[.]fa", dir("c123/"), value = T)
+tax <- read.csv("~/Desktop/B10K_phase2/taxonomy_codes.csv", header = T, row.names = 1)
+taxa <- c("Rhea_pennata",
+"Tinamus_guttatus",
+"Anas_platyrhynchos",
+"Chauna_torquata",
+"Gallus_gallus",
+"Coturnix_japonica",
+"Meleagris_gallopavo",
+"Tympanuchus_cupido",
+"Podiceps_cristatus",
+"Podilymbus_podiceps",
+"Mesitornis_unicolor",
+"Pterocles_gutturalis",
+"Columba_livia",
+"Patagioenas_fasciata",
+"Tauraco_erythrolophus",
+"Corythaixoides_concolor",
+"Chlamydotis_macqueenii",
+"Lophotis_ruficrista",
+"Geococcyx_californianus",
+"Crotophaga_sulcirostris",
+"Ceuthmochares_aereus",
+"Cuculus_canorus",
+"Antrostomus_carolinensis",
+"Chordeiles_acutipennis",
+"Chaetura_pelagica",
+"Hemiprocne_comata",
+"Calypte_anna",
+"Oreotrochilus_melanogaster",
+"Rhynochetos_jubatus",
+"Phaethon_lepturus",
+"Aptenodytes_forsteri",
+"Pelecanoides_urinatrix",
+"Nipponia_nippon",
+"Mesembrinibis_cayennensis",
+"Egretta_garzetta",
+"Cochlearius_cochlearius",
+"Scopus_umbretta",
+"Pelecanus_crispus",
+"Phalacrocorax_harrisi",
+"Phalacrocorax_carbo",
+"Atlantisia_rogersi",
+"Heliornis_fulica",
+"Balearica_regulorum",
+"Psophia_crepitans",
+"Charadrius_vociferus",
+"Charadrius_alexandrinus",
+"Alca_torda",
+"Haliaeetus_albicilla",
+"Aquila_chrysaetos",
+"Colius_striatus",
+"Urocolius_indicus",
+"Tyto_alba",
+"Strix_occidentalis",
+"Apaloderma_vittatum",
+"Trogon_melanurus",
+"Buceros_rhinoceros",
+"Bucorvus_abyssinicus",
+"Merops_nubicus",
+"Eurystomus_gularis",
+"Picoides_pubescens",
+"Indicator_maculatus",
+"Cariama_cristata",
+"Chunga_burmeisteri",
+"Falco_peregrinus",
+"Herpetotheres_cachinnans",
+"Melopsittacus_undulatus",
+"Nestor_notabilis",
+"Scytalopus_superciliaris",
+"Campylorhamphus_procurvoides",
+"Manacus_manacus",
+"Lepidothrix_coronata",
+"Atrichornis_clamosus",
+"Menura_novaehollandiae",
+"Orthonyx_spaldingii",
+"Pomatostomus_ruficeps",
+"Corvus_brachyrhynchos",
+"Aphelocoma_coerulescens",
+"Panurus_biarmicus",
+"Alaudala_cheleensis",
+"Taeniopygia_guttata",
+"Lonchura_striata",
+"Geospiza_fortis",
+"Nesospiza_acunhae")
+tax <- tax[taxa,]
+
+# Extract Great Auk loci
+
+aukdat <- read.dna("../data/OUT-0003_gff_aln-q30_razorbill_v2_sort9_clean_greatAuk.fa", format = 'fasta')
+locuscodes <- read.csv("../data/locus_codes.csv", header = T)
+
+rlocnames <- gsub("[.]c123[.]linsi[.]fa", "", loci)
+
+# Add the Great Auk to alignments
+
+locifull <- vector()
+for(i in 1:length(loci)){
+      loc <- read.dna(paste0("c123/", loci[i]), format = "fasta")
+      if(is.null(loc)) next
+      print(nrow(loc))
+      if(is.list(loc)){
+	loc <- loc[which(names(loc) %in% tax[taxa,]$code)]
+      } else {
+	loc <- as.list(loc[which(rownames(loc) %in% tax[taxa,]$code),])
+      }
+      if(locuscodes[which(locuscodes[,2] == rlocnames[i]), 3] %in% names(aukdat)){
+      	loc <- append(loc, aukdat[locuscodes[which(locuscodes[,2] == rlocnames[i]), 3]])
+      }
+      print(length(loc))
+      if(length(loc) < 4) next
+      write.dna(loc, format = "fasta", file = paste0("exon_als_cut_auk/", loci[i]), nbcol = -1, colsep = "")
+}

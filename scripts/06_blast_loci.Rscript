@@ -1,0 +1,16 @@
+library(phangorn)
+
+loci <- grep("[.]fasta$", dir("postshrink_alignments"), value = T)
+
+for(i in 1:length(loci)){
+	loc <- try(read.dna(paste0("postshrink_alignments/", loci[i]), format = "fasta")["GALGAL",])
+	if(class(loc) == "try-error") next
+	write.dna(loc, file = "blastSearches/temploc.fasta", format = "fasta", nbcol = -1, colsep = "")
+	system(paste0('blastn -db nt -query blastSearches/temploc.fasta -out blastSearches/', loci[i], '.txt -entrez_query "Gallus gallus [Organism]" -remote'))
+	res <- readLines(paste0("blastSearches/", loci[i], ".txt"))
+	reslines <- grep(">", res)
+	res <- try(paste0(res[c(reslines[1]:(reslines[1]+2), reslines[2]:(reslines[2]+2))], collapse = " "))
+	if(class(res) == "try-error") next
+	writeLines(res, con = paste0("blastSearches/", loci[i], ".txt"))
+	print(paste("blasted locus ", i))
+}

@@ -1,0 +1,231 @@
+# Test whether Aitchison variance (base composition heterogeneity) per gene
+# is related to Bernoulli test p-values for evolutionary rate acceleration.
+#
+# If no relationship exists, base composition is not confounding the
+# evolutionary rate signal reported in the manuscript.
+
+library(ggplot2)
+library(gridExtra)
+
+# ---- Load data ----
+
+load("../data/p_values_per_locus.Rdata")  # pvalsperloc matrix
+aitch <- read.csv("../data/aitchison_variance_results.csv",
+                   stringsAsFactors = FALSE)
+
+# ---- Match loci between datasets ----
+# Aitchison: "GALGAL_R00001.c123.linsi"
+# P-values:  "GALGAL_R00001.c123.linsi_macse_NT"
+
+aitch$locus_pval <- paste0(aitch$locus, "_macse_NT")
+
+shared <- intersect(aitch$locus_pval, rownames(pvalsperloc))
+cat("Loci in Aitchison data:", nrow(aitch), "\n")
+cat("Loci in p-value data:", nrow(pvalsperloc), "\n")
+cat("Shared loci:", length(shared), "\n\n")
+
+# Align datasets
+aitch_matched <- aitch[match(shared, aitch$locus_pval), ]
+pvals_matched <- pvalsperloc[shared, ]
+
+# ---- Define columns of interest ----
+# SM pairs: sedentary-migratory (N=15). "flessDecel" = migratory faster.
+# similar pairs: VV/DD minimal change (N=14). Control.
+# fless pairs: flight-loss comparisons (N=13).
+
+test_cols <- list(
+  # SM pairs - the key migratory signal
+  ds_sm_Accel   = "ds_sm_flessAccel",
+  ds_sm_Decel   = "ds_sm_flessDecel",
+  dn_sm_Accel   = "dn_sm_flessAccel",
+  dn_sm_Decel   = "dn_sm_flessDecel",
+  dnds_sm_Accel = "dnds_sm_flessAccel",
+  dnds_sm_Decel = "dnds_sm_flessDecel",
+  # Similar pairs - control
+  ds_similar_Accel   = "ds_similar_flessAccel",
+  ds_similar_Decel   = "ds_similar_flessDecel",
+  dn_similar_Accel   = "dn_similar_flessAccel",
+  dn_similar_Decel   = "dn_similar_flessDecel",
+  dnds_similar_Accel = "dnds_similar_flessAccel",
+  dnds_similar_Decel = "dnds_similar_flessDecel",
+  # Flightless pairs
+  ds_fless_Accel   = "ds_fless_flessAccel",
+  ds_fless_Decel   = "ds_fless_flessDecel",
+  dn_fless_Accel   = "dn_fless_flessAccel",
+  dn_fless_Decel   = "dn_fless_flessDecel",
+  dnds_fless_Accel = "dnds_fless_flessAccel",
+  dnds_fless_Decel = "dnds_fless_flessDecel"
+)
+
+# ---- Spearman correlations ----
+
+aitchison_var <- aitch_matched$aitchison_var
+
+results <- data.frame(
+  column = character(),
+  pair_type = character(),
+  rate_metric = character(),
+  direction = character(),
+  n_genes = integer(),
+  rho = numeric(),
+  p_value = numeric(),
+  stringsAsFactors = FALSE
+)
+
+for (nm in names(test_cols)) {
+  col <- test_cols[[nm]]
+  pv <- pvals_matched[, col]
+  valid <- !is.na(pv) & !is.na(aitchison_var)
+
+  if (sum(valid) < 10) {
+    results <- rbind(results, data.frame(
+      column = col, pair_type = NA, rate_metric = NA,
+      direction = NA, n_genes = sum(valid),
+      rho = NA, p_value = NA, stringsAsFactors = FALSE))
+    next
+  }
+
+  ct <- cor.test(aitchison_var[valid], pv[valid], method = "spearman",
+                 exact = FALSE)
+
+  # Parse name components
+  parts <- strsplit(nm, "_")[[1]]
+  pair_type <- parts[2]
+  rate_metric <- parts[1]
+  direction <- parts[3]
+
+  results <- rbind(results, data.frame(
+    column = col,
+    pair_type = pair_type,
+    rate_metric = rate_metric,
+    direction = direction,
+    n_genes = sum(valid),
+    rho = round(ct$estimate, 4),
+    p_value = ct$p.value,
+    stringsAsFactors = FALSE
+  ))
+}
+
+# ---- Print results table ----
+
+cat("============================================================\n")
+cat("Spearman correlations: Aitchison variance vs Bernoulli p-values\n")
+cat("============================================================\n\n")
+
+for (pt in c("sm", "similar", "fless")) {
+  label <- switch(pt,
+    sm = "Sedentary-Migratory pairs (SM, N=15)",
+    similar = "Minimal change pairs (VV/DD, N=14)",
+    fless = "Flight-loss pairs (FL, N=13)")
+  cat("---", label, "---\n")
+  sub <- results[results$pair_type == pt & !is.na(results$pair_type), ]
+  for (i in seq_len(nrow(sub))) {
+    sig <- ifelse(sub$p_value[i] < 0.05, " *", "")
+    cat(sprintf("  %-12s %-6s : rho = %7.4f, p = %.4f, n = %d%s\n",
+                sub$rate_metric[i], sub$direction[i],
+                sub$rho[i], sub$p_value[i], sub$n_genes[i], sig))
+  }
+  cat("\n")
+}
+
+# ---- Summary statement ----
+
+sig_count <- sum(results$p_value < 0.05, na.rm = TRUE)
+total_tests <- sum(!is.na(results$p_value))
+cat(sprintf("Summary: %d / %d tests significant at alpha=0.05\n",
+            sig_count, total_tests))
+cat(sprintf("Expected by chance at alpha=0.05: %.1f\n\n",
+            total_tests * 0.05))
+
+# ---- Plots ----
+
+# Build a long-format data frame for the key columns (one direction per test)
+plot_data <- data.frame()
+
+# Map each key column to its pair type and rate metric labels
+key_info <- data.frame(
+  col = c("ds_sm_flessDecel", "dn_sm_flessDecel", "dnds_sm_flessDecel",
+          "ds_similar_flessDecel", "dn_similar_flessDecel",
+          "dnds_similar_flessDecel",
+          "ds_fless_flessAccel", "dn_fless_flessAccel",
+          "dnds_fless_flessAccel"),
+  pair_type = rep(c("To migratory", "Minimal change", "Towards flight loss"),
+                  each = 3),
+  rate_metric = rep(c("dS", "dN", "dN/dS"), 3),
+  stringsAsFactors = FALSE
+)
+
+for (i in seq_len(nrow(key_info))) {
+  col <- key_info$col[i]
+  pv <- pvals_matched[, col]
+  valid <- !is.na(pv) & !is.na(aitchison_var)
+  if (sum(valid) < 10) next
+
+  tmp <- data.frame(
+    aitchison_var = aitchison_var[valid],
+    p_value = pv[valid],
+    pair_type = key_info$pair_type[i],
+    rate_metric = key_info$rate_metric[i],
+    stringsAsFactors = FALSE
+  )
+  plot_data <- rbind(plot_data, tmp)
+}
+
+# Build annotation data frame with matching factor levels
+annot_list <- list()
+for (i in seq_len(nrow(key_info))) {
+  col <- key_info$col[i]
+  pv <- pvals_matched[, col]
+  valid <- !is.na(pv) & !is.na(aitchison_var)
+  if (sum(valid) < 10) next
+
+  ct <- cor.test(aitchison_var[valid], pv[valid], method = "spearman",
+                 exact = FALSE)
+  annot_list[[i]] <- data.frame(
+    pair_type = key_info$pair_type[i],
+    rate_metric = key_info$rate_metric[i],
+    label = sprintf("rho == %.3f ~~ italic(p) == %.3f",
+                    round(ct$estimate, 3), round(ct$p.value, 3)),
+    n = sum(valid),
+    stringsAsFactors = FALSE
+  )
+}
+annot <- do.call(rbind, annot_list)
+
+# Set factor levels for consistent ordering
+pt_levels <- c("To migratory", "Minimal change", "Towards flight loss")
+rm_levels <- c("dS", "dN", "dN/dS")
+
+plot_data$pair_type <- factor(plot_data$pair_type, levels = pt_levels)
+plot_data$rate_metric <- factor(plot_data$rate_metric, levels = rm_levels)
+annot$pair_type <- factor(annot$pair_type, levels = pt_levels)
+annot$rate_metric <- factor(annot$rate_metric, levels = rm_levels)
+
+p <- ggplot(plot_data, aes(x = aitchison_var, y = p_value)) +
+  geom_point(alpha = 0.12, size = 0.3, colour = "grey30") +
+  geom_smooth(method = "loess", se = TRUE, colour = "firebrick",
+              linewidth = 0.8, span = 0.75) +
+  geom_text(data = annot,
+            aes(label = label),
+            x = Inf, y = Inf,
+            hjust = 1.05, vjust = 1.5,
+            size = 3, parse = TRUE, inherit.aes = FALSE) +
+  facet_grid(pair_type ~ rate_metric) +
+  labs(x = "Aitchison variance (base composition heterogeneity)",
+       y = "Bernoulli test p-value") +
+  theme_bw(base_size = 11) +
+  theme(strip.background = element_rect(fill = "grey95"),
+        panel.grid.minor = element_blank())
+
+pdf("../figures/Fig_S_aitchison_vs_pvalues.pdf", width = 8, height = 7,
+    useDingbats = FALSE)
+print(p)
+dev.off()
+
+cat("Figure saved to: ../figures/Fig_S_aitchison_vs_pvalues.pdf\n")
+
+# ---- Save results table ----
+
+write.csv(results, "../data/aitchison_vs_pvalues_correlations.csv",
+          row.names = FALSE)
+cat("Results table saved to: ../data/aitchison_vs_pvalues_correlations.csv\n")

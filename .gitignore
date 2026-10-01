@@ -1,0 +1,13 @@
+# macOS
+.DS_Store
+
+# Large regenerable outputs
+output/*
+!output/.gitkeep
+hyphaeon_input/
+hyphaeon_out/
+
+# R
+.Rhistory
+.RData
+.Rproj.user/

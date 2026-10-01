@@ -1,0 +1,55 @@
+library(phangorn)
+
+loci <- grep("[.]fasta$", dir("postshrink_alignments"), value = T)
+
+tempctl <- readLines("../data/dnds_template.ctl")
+setwd("dnds_analyses")
+
+for(i in 1:length(loci)){
+	
+	# Set up PAML control file, cut tree, and run codeml
+	
+	tr <- unroot(read.tree(paste0("../postshrink_alignments/", loci[i], ".treefile")))
+	tr$edge.length <- NULL
+	system(paste0("mkdir ", gsub("[.]fasta", "", loci[i])))
+	setwd(paste0(gsub("[.]fasta", "", loci[i])))
+	write.tree(tr, file = "tree.nwk")
+	locctl <- tempctl
+	locctl[1] <- paste0("seqfile = ../../postshrink_alignments/", loci[i], " * sequence data file name")
+	writeLines(locctl, con = "dnds_control.ctl")
+	system("codeml dnds_control.ctl")
+	
+	# Extract dn and ds distances
+	
+	dntab <- readLines("2ML.dN")
+	if(length(dntab) == 0){
+		setwd("..")
+		system(paste0("rm -r ", gsub("[.]fasta", "", loci[i])))
+		next
+	}
+	
+	# Run Erable to get all branch lengths from distance matrix
+	
+	dntab <- c("1", dntab)
+	dat <- read.dna(paste0("../../postshrink_alignments/", loci[i]), format = "fasta")
+	dntab[2] <- paste0(dntab[2], " ", ncol(dat))
+	writeLines(dntab, con = "2ML.dN.phy")
+	system("erable -i 2ML.dN.phy -t tree.nwk -o dN")
+	dntr <- read.tree("dN.length.nwk")
+	dntr$edge.length[dntr$edge.length < 0] <- 0
+	write.tree(dntr, file = paste0("../", gsub("[.]fasta", "_dN.tre", loci[i])))	
+
+	dstab <- readLines("2ML.dS")
+        dstab <- c("1", dstab)
+        dstab[2] <- paste0(dstab[2], " ", ncol(dat))
+        writeLines(dstab, con = "2ML.dS.phy")
+        system("erable -i 2ML.dS.phy -t tree.nwk -o dS")
+        dstr <- read.tree("dS.length.nwk")
+        dstr$edge.length[dstr$edge.length < 0] <- 0
+        write.tree(dstr, file = paste0("../", gsub("[.]fasta", "_dS.tre", loci[i])))
+	
+	setwd("..")
+	system(paste0("rm -r ", gsub("[.]fasta", "", loci[i])))
+}
+
+setwd("..")

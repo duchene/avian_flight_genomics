@@ -1,0 +1,157 @@
+library(phangorn)
+library(ggplot2)
+
+load("../data/dnds_sisdifs_vol.Rdata")
+trnames <- gsub("_dS[.]tre", "", grep("dS", dir("dnds_analyses"), value = T))
+
+
+# ---- 1. Per-gene binomial tests of acceleration ----
+#
+# For each gene, test whether the proportion of sister pairs with
+# moldiff > 1 (less-flying taxon faster) differs from 0.5.
+# Categories:
+#   similar = VV and DD pairs (both sisters have same flight mode)
+#   diff    = all non-VV/DD pairs
+#   SM      = sedentary-migratory pairs
+#   fless   = flight-loss pairs (FV, FD, DV)
+# Minimum 9 non-NA pairs per gene per category required.
+# Returns c(p_accel, p_decel) per category.
+
+test_locus_cat <- function(df, locus, cat_filter) {
+  rows <- which(df[, 1] == locus & cat_filter)
+  vals <- df[rows, 3]
+  if (all(is.na(vals))) return(c(NA, NA))
+  n <- sum(!is.na(vals))
+  if (n < 9) return(c(NA, NA))
+  k <- sum(vals > 1, na.rm = TRUE)
+  c(binom.test(k, n, alternative = "greater")$p.value,
+    binom.test(k, n, alternative = "less")$p.value)
+}
+
+run_binomial_tests <- function(df, trnames) {
+  is_similar <- df$comptype %in% c("VV", "DD")
+  is_diff    <- !(df$comptype %in% c("VV", "DD"))
+  is_sm      <- df$comptype == "SM"
+  is_fless   <- !(df$comptype %in% c("VV", "DD", "SM"))
+  sapply(trnames, function(x) {
+    c(test_locus_cat(df, x, is_similar),
+      test_locus_cat(df, x, is_diff),
+      test_locus_cat(df, x, is_sm),
+      test_locus_cat(df, x, is_fless))
+  })
+}
+
+dslocbinaccel   <- run_binomial_tests(sisdifggds, trnames)
+dnlocbinaccel   <- run_binomial_tests(sisdifggdn, trnames)
+dndslocbinaccel <- run_binomial_tests(sisdifggdnds, trnames)
+
+
+# ---- 2. Collect p-values into matrix ----
+#
+# pvalsperloc: n_loci x 24 columns (8 per rate metric).
+# Per-metric column order: similar_Accel, similar_Decel,
+#   diff_Accel, diff_Decel, sm_Accel, sm_Decel, fless_Accel, fless_Decel
+
+pvalsperloc <- cbind(t(dslocbinaccel), t(dnlocbinaccel), t(dndslocbinaccel))
+
+cat_suffixes <- c("similar_flessAccel", "similar_flessDecel",
+                  "diff_flessAccel", "diff_flessDecel",
+                  "sm_flessAccel", "sm_flessDecel",
+                  "fless_flessAccel", "fless_flessDecel")
+colnames(pvalsperloc) <- c(paste0("ds_", cat_suffixes),
+                           paste0("dn_", cat_suffixes),
+                           paste0("dnds_", cat_suffixes))
+
+save(pvalsperloc, file = "../data/p_values_per_locus.Rdata")
+
+
+# ---- 3. Figure 1: Cumulative p-value distributions ----
+#
+# Each panel shows ECDFs for fless (purple), similar (green), SM (yellow).
+# Column offsets from the fless column index: -6 = similar, -2 = SM.
+# Top row: deceleration (fless cols 8/16/24 for ds/dn/dnds).
+# Bottom row: acceleration (fless cols 7/15/23 for ds/dn/dnds).
+
+plot_ecdf_panel <- function(i_fless) {
+  i_similar <- i_fless - 6
+  i_sm      <- i_fless - 2
+  plot(ecdf(pvalsperloc[, i_fless]), col = "#3c1b4dff",
+       main = colnames(pvalsperloc)[i_fless])
+  lines(ecdf(pvalsperloc[, i_similar]), col = "#90d743ff", do.points = TRUE)
+  lines(ecdf(pvalsperloc[, i_sm]), col = "#f7e913ff", do.points = TRUE)
+  abline(0, 1)
+  legend("topleft",
+    col = c("#3c1b4dff", "#90d743ff", "#f7e913ff"), pch = 19,
+    legend = sapply(c(i_fless, i_similar, i_sm), function(j)
+      paste0("KS D = ", round(ks.test(pvalsperloc[, j], "punif", 0, 1,
+                                       alternative = "greater")$statistic, 2))))
+}
+
+pdf("../figures/Fig_1_pvalCummDens.pdf", height = 6, width = 8)
+par(mfrow = c(2, 3))
+for (i in c(8, 16, 24)) plot_ecdf_panel(i)
+for (i in c(7, 15, 23)) plot_ecdf_panel(i)
+dev.off()
+
+
+# ---- 4. Stacked barplots: acceleration vs deceleration counts ----
+
+Cramers_V <- function(chi, n, df) sqrt((chi) / (n * df))
+
+# Count gene-pair observations with moldiff > 1 (accel) or < 1 (decel)
+# for each rate metric within a flight-category subset.
+make_trend_df <- function(cat_label) {
+  filt <- switch(cat_label,
+    similar = function(ct) ct %in% c("VV", "DD"),
+    diff    = function(ct) !(ct %in% c("VV", "DD")),
+    sm      = function(ct) ct == "SM",
+    fless   = function(ct) !(ct %in% c("VV", "DD", "SM")))
+  counts <- c(
+    sum(sisdifggds$moldiff[filt(sisdifggds$comptype)] > 1, na.rm = TRUE),
+    sum(sisdifggds$moldiff[filt(sisdifggds$comptype)] < 1, na.rm = TRUE),
+    sum(sisdifggdn$moldiff[filt(sisdifggdn$comptype)] > 1, na.rm = TRUE),
+    sum(sisdifggdn$moldiff[filt(sisdifggdn$comptype)] < 1, na.rm = TRUE),
+    sum(sisdifggdnds$moldiff[filt(sisdifggdnds$comptype)] > 1, na.rm = TRUE),
+    sum(sisdifggdnds$moldiff[filt(sisdifggdnds$comptype)] < 1, na.rm = TRUE))
+  data.frame(
+    moldat = factor(c("ds", "ds", "dn", "dn", "dnds", "dnds"),
+                    levels = c("ds", "dn", "dnds")),
+    geneTrend = rep(c("flessAccel", "flessDecel"), 3),
+    N = counts)
+}
+
+pasfaiflng <- make_trend_df("similar")
+ggplot(pasfaiflng, aes(fill = geneTrend, y = N, x = moldat)) +
+  geom_bar(position = "fill", stat = "identity")
+
+pasfaifl <- make_trend_df("diff")
+ggplot(pasfaifl, aes(fill = geneTrend, y = N, x = moldat)) +
+  geom_bar(position = "fill", stat = "identity")
+
+pasfaism    <- make_trend_df("sm")
+pasfaifless <- make_trend_df("fless")
+
+pasfaiflfls <- rbind(pasfaiflng, pasfaifl, pasfaism, pasfaifless)
+pasfaiflfls$flight <- c(rep("smallDiff", 6), rep("largeDiff", 6),
+                        rep("SM", 6), rep("fless", 6))
+
+vs <- sapply(seq(1, nrow(pasfaiflfls), 2), function(x) {
+  mat <- matrix(c(pasfaiflfls$N[x],
+                  pasfaiflfls$N[x] + pasfaiflfls$N[x + 1],
+                  pasfaiflfls$N[x + 1],
+                  pasfaiflfls$N[x] + pasfaiflfls$N[x + 1]), 2, 2)
+  chsq <- chisq.test(mat)
+  Cramers_V(chsq$statistic, sum(mat), chsq$parameter)
+})
+pasfaiflfls$cramersV <- as.vector(sapply(vs, function(x) c(round(x, 2), NA)))
+
+pdf("../figures/dnds_stackedSimple.pdf", height = 5, width = 10, useDingbats = F)
+ggplot(pasfaiflfls, aes(fill = geneTrend, y = N, x = moldat)) +
+  geom_bar(position = "fill", stat = "identity") +
+  geom_abline(slope = 0, intercept = 0.5, col = "black", lty = 2) +
+  facet_grid(~ flight) +
+  geom_text(aes(y = rep(c(0.65, 0.4), 12), label = N),
+            vjust = 1.6, color = "black", size = 3.5) +
+  geom_text(aes(y = 0.95, label = cramersV),
+            color = "black", size = 3.5)
+dev.off()
