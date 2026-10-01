@@ -58,7 +58,7 @@ the taxon level, not in contrasts. Only ΔHWI is confounded with migration (p = 
 the index is not (p = 0.300).
 
 **Validation.** Published wing areas exist for 8 of the 84 taxa. Across them the index
-tracks measured wing loading at R² = 0.93, ratio 0.67 to 2.14, spanning 17 g to 4664 g.
+tracks measured wing loading at R² = 0.93 (0.92 if each source's own specimen mass is used on both sides), ratio 0.67 to 2.14, spanning 17 g to 4664 g.
 Wing area scales as wing length^1.93 (95% CI 1.51 to 2.35), which is why the exponent is 2.
 
 **Design arithmetic after relabelling.** minimal 15, to migratory 15, toward flight loss 7,

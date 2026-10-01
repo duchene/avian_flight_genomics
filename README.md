@@ -20,7 +20,10 @@ mass over wing area, and published wing areas exist for only 8 of the 84 taxa. W
 is available for all 84, from AVONET for 83 and from Livezey (1988, Table 1) for
 *Pinguinus impennis*. Wing area scales as wing length to the power 1.9 to 2.4 where both
 are known, so the index has the dimensions of wing loading and tracks measured loading
-with R² = 0.92 across 17 g to 4664 g and six flight styles.
+with R² = 0.93 across 17 g to 4664 g and six flight styles. Note that the index uses the
+AVONET mass while the published loading uses each source's own specimen mass, so part of
+the scatter in that comparison is a difference in mass source rather than in the length²
+approximation.
 
 Two further axes enter as binary predictors: gain of migration, and flight loss. The
 wing-loading index is statistically orthogonal to migration, so both can be fitted without
