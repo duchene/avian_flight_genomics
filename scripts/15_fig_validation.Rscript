@@ -1,0 +1,114 @@
+# 15_fig_validation.Rscript
+#
+# Figure 1. Validation of ln(mass / wing length^2) as the flight predictor.
+#
+# This figure is framed as validation rather than as a result. Primary flight style and
+# flight ability were scored partly from how these birds fly, so a correlation with a
+# wing-morphology index is expected. What the figure establishes is that the index
+# recovers measured wing loading (panel C) and orders the styles sensibly (panel A).
+#
+# Colour encodes an ordered variable, so a sequential perceptually uniform ramp is used
+# rather than a categorical palette. The x axis carries identity in every panel, so
+# colour is never the sole encoding.
+#
+# Requires: ape
+# In:  ../output/traits_per_taxon.csv, ../data/dated.auk.tre
+# Out: ../figures/Fig1_validation.pdf
+
+library(ape)
+
+dat <- read.csv("../output/traits_per_taxon.csv", stringsAsFactors = FALSE)
+phy <- read.tree("../data/dated.auk.tre")
+
+dir.create("../figures", showWarnings = FALSE)
+
+
+# ---- 1. Ordering and palette ----
+
+style_order <- names(sort(tapply(dat$loading_index, dat$style, median)))
+dat$style <- factor(dat$style, levels = style_order)
+pal <- setNames(hcl.colors(nlevels(dat$style), "Viridis"), levels(dat$style))
+
+abil_order <- c("volant", "limited", "near lost", "lost")
+dat$ability <- factor(dat$ability, levels = abil_order)
+
+# Axis ticks are placed on the natural-log scale but labelled with back-transformed
+# values, so the reader sees grams per square centimetre rather than log units.
+log_axis <- function(side, at) axis(side, at = log(at), labels = at, las = 1)
+ticks <- c(0.1, 0.3, 1, 3, 10, 30, 100)
+
+panel_label <- function(txt) mtext(txt, side = 3, adj = -0.18, line = 0.6, font = 2, cex = 1)
+
+strip_plot <- function(x, g, cols, ticks) {
+  k <- nlevels(g)
+  plot(NA, xlim = c(0.5, k + 0.5), ylim = range(x) + c(-0.3, 0.3),
+       axes = FALSE, xlab = "", ylab = "")
+  abline(h = log(ticks), col = "grey92", lwd = 0.6)
+  for (i in seq_len(k)) {
+    v <- x[as.integer(g) == i]
+    jit <- seq(-0.18, 0.18, length.out = max(length(v), 2))[seq_along(v)]
+    if (length(v) == 1) jit <- 0
+    segments(i - 0.3, median(v), i + 0.3, median(v), lwd = 2.2, col = "grey25")
+    points(i + jit, v, pch = 21, bg = cols[i], col = "white", cex = 1.15, lwd = 0.7)
+    mtext(paste0("n=", length(v)), side = 3, at = i, line = -0.4, cex = 0.6, col = "grey40")
+  }
+  log_axis(2, ticks)
+  axis(1, at = seq_len(k), labels = FALSE)
+  text(seq_len(k), par("usr")[3] - 0.45 * diff(par("usr")[3:4]) / 10,
+       levels(g), srt = 35, adj = 1, xpd = NA, cex = 0.72)
+  mtext(expression(mass / wing~length^2~~(g~cm^-2)), side = 2, line = 2.6, cex = 0.78)
+  box(bty = "l", col = "grey45")
+}
+
+
+# ---- 2. Figure ----
+
+pdf("../figures/Fig1_validation.pdf", width = 11, height = 13)
+layout(matrix(c(1, 2, 3, 4, 4, 4), nrow = 2, byrow = TRUE), heights = c(1, 2.6))
+par(mar = c(5.5, 4.5, 2.5, 1), cex.axis = 0.8, tcl = -0.25, mgp = c(2.4, 0.5, 0))
+
+# A. by primary flight style
+strip_plot(dat$loading_index, dat$style, pal, ticks)
+panel_label("A")
+
+# B. by flight ability
+pal_ab <- hcl.colors(nlevels(dat$ability), "Viridis")
+strip_plot(dat$loading_index, dat$ability, pal_ab, ticks)
+panel_label("B")
+
+# C. index against measured wing loading, for the taxa where wing area is published
+has <- !is.na(dat$wing_loading)
+par(mar = c(5.5, 4.5, 2.5, 1))
+plot(log(dat$wing_loading[has]), dat$loading_index[has],
+     xlim = log(c(0.1, 30)), ylim = log(c(0.1, 30)),
+     axes = FALSE, xlab = "", ylab = "", type = "n")
+abline(h = log(ticks), v = log(ticks), col = "grey92", lwd = 0.6)
+abline(0, 1, col = "grey55", lty = 2, lwd = 1.2)
+points(log(dat$wing_loading[has]), dat$loading_index[has],
+       pch = 21, bg = pal[as.character(dat$style[has])], col = "white", cex = 1.4, lwd = 0.8)
+text(log(dat$wing_loading[has]), dat$loading_index[has],
+     sub("^(\\w)\\w+ ", "\\1. ", dat$species[has]), pos = 4, cex = 0.55, col = "grey30", xpd = NA)
+log_axis(1, ticks); log_axis(2, ticks)
+mtext(expression(measured~wing~loading~~(g~cm^-2)), side = 1, line = 2.2, cex = 0.78)
+mtext(expression(mass / wing~length^2~~(g~cm^-2)), side = 2, line = 2.6, cex = 0.78)
+r2 <- cor(log(dat$wing_loading[has]), dat$loading_index[has])^2
+legend("topleft", bty = "n", cex = 0.72,
+       legend = c(sprintf("n = %d taxa, R2 = %.2f", sum(has), r2), "dashed line is 1:1"))
+box(bty = "l", col = "grey45")
+panel_label("C")
+
+# D. ladderised dated tree, tips coloured by flight style
+par(mar = c(1, 3, 2.5, 1))
+tipcol <- setNames(as.character(pal[as.character(dat$style)]), dat$tip)
+phy <- ladderize(phy)
+plot(phy, tip.color = tipcol[phy$tip.label], cex = 0.58, no.margin = FALSE,
+     edge.color = "grey45", edge.width = 0.8, label.offset = 0.8,
+     x.lim = c(0, max(node.depth.edgelength(phy)) * 1.42))
+legend("bottomleft", legend = levels(dat$style), col = pal, pch = 19,
+       bty = "n", cex = 0.72, pt.cex = 1.1, ncol = 2,
+       title = "primary flight style", title.adj = 0)
+mtext("D", side = 3, adj = -0.03, line = 0.6, font = 2, cex = 1)
+
+dev.off()
+cat("written ../figures/Fig1_validation.pdf\n")
+cat(sprintf("panel C: %d taxa with published wing area, R2 = %.3f\n", sum(has), r2))

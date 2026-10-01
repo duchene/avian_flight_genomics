@@ -1,0 +1,190 @@
+# 14_traits_assemble.Rscript
+#
+# Build the canonical trait table for all downstream analyses.
+#
+# Produces one row per taxon (84) and one row per sister pair (42), carrying the primary
+# flight predictor ln(mass / wing length^2) together with the two binary phenotypes and
+# the covariates used by scripts 16, 17, 22 and 23.
+#
+# All logarithms are natural, matching masdif in genome_flight_age_mass_data.Rdata.
+#
+# Requires: readxl, ape
+# In:  ../data/Table_S1.xlsx (sheet "Table S2. Morphometrics")
+#      ../data/taxonomy_codes.csv
+#      ../data/taxon_comparisons_fless_flying.csv
+#      ../data/dated.auk.tre
+#      ../data/Feng_Table_1.csv
+#      ../data/genome_flight_age_mass_data.Rdata
+#      optionally ../data/postshrink_alignments/ for per-taxon GC across genes
+# Out: ../output/traits_per_taxon.csv
+#      ../output/traits_contrasts.csv
+
+library(readxl)
+library(ape)
+
+dir.create("../output", showWarnings = FALSE)
+
+
+# ---- 1. Per-taxon morphometrics ----
+
+tr <- read_excel("../data/Table_S1.xlsx", sheet = "Table S2. Morphometrics")
+tr <- as.data.frame(tr, stringsAsFactors = FALSE)
+
+# Column names in the workbook are descriptive. Map them to short handles once, here,
+# so that no downstream script depends on the spreadsheet header text.
+dat <- data.frame(
+  pair_id   = tr[["Pair ID (analysis)"]],
+  pair_no   = tr[["Pair #"]],
+  code      = tr[["Taxon code"]],
+  sister    = ifelse(grepl("^lesser", tr[["Sister"]]), "lesser", "greater"),
+  species   = sub("†$", "", trimws(tr[["Species (AviList)"]])),
+  ability   = tr[["Flight ability"]],
+  style     = tr[["Primary flight style"]],
+  migration = tr[["Winged migration"]],
+  habit     = tr[["Pair: flight habit change"]],
+  hwi       = as.numeric(tr[["HWI (species)"]]),
+  wing_mm   = as.numeric(tr[["Wing length (mm)"]]),
+  mass_g    = as.numeric(tr[["Body mass g (AVONET / literature)"]]),
+  tarsus_mm = as.numeric(tr[["Tarsus length (mm)"]]),
+  tail_mm   = as.numeric(tr[["Tail length (mm)"]]),
+  wing_area_cm2 = as.numeric(tr[["Wing area (cm2)"]]),
+  wing_loading  = as.numeric(tr[["Wing loading (g/cm2)"]]),
+  stringsAsFactors = FALSE
+)
+
+# The primary predictor. Wing length is converted mm to cm so that the index carries the
+# units of a wing loading, grams per square centimetre of wing-length-squared.
+dat$loading_index <- log(dat$mass_g / (dat$wing_mm / 10)^2)
+
+# Secondary shape index, retained for the sensitivity reported in script 16.
+dat$shape_index <- log(dat$wing_mm / dat$mass_g^(1 / 3))
+
+stopifnot(nrow(dat) == 84, !any(is.na(dat$loading_index)))
+
+
+# ---- 2. Tree tip labels ----
+#
+# Table S1 follows AviList 2025 while the dated tree follows the taxonomy used by the
+# B10K consortium. Join through the six-letter taxon code rather than by name, which is
+# stable across both. Pinguinus impennis was added to the tree by hand and so is absent
+# from taxonomy_codes.csv.
+
+tax <- read.csv("../data/taxonomy_codes.csv", header = T, row.names = 1,
+                stringsAsFactors = FALSE)
+code2tip <- setNames(tax$taxa, tax$code)
+code2tip["PINIMP"] <- "Pinguinus_impennis"
+dat$tip <- unname(code2tip[dat$code])
+
+phy <- read.tree("../data/dated.auk.tre")
+if (!all(dat$tip %in% phy$tip.label)) {
+  stop("tips absent from dated.auk.tre: ",
+       paste(setdiff(dat$tip, phy$tip.label), collapse = ", "))
+}
+
+
+# ---- 3. Binary phenotypes ----
+#
+# Two binary axes accompany the continuous index in the per-gene analyses of scripts 18
+# to 20. Both are coded on the taxon that underwent the change, so that a 1 marks the
+# derived state.
+#
+#   flight_loss : the sister scored as having lost or nearly lost flight
+#   migratory   : the sister scored as a winged migrant
+#
+# Flight ability and primary flight style are deliberately not used as per-gene
+# predictors. HyphAeon accepts only binary or continuous phenotypes and both of those
+# variables are multi-level.
+
+dat$flight_loss <- as.integer(dat$ability %in% c("lost", "near lost"))
+dat$migratory   <- as.integer(grepl("^migr", dat$migration))
+
+
+# ---- 4. Per-taxon base composition ----
+#
+# Mean GC comes from the published assembly statistics. Variance in GC across genes is
+# computed from the alignments when they are present, since no precomputed per-taxon
+# summary exists; aitchison_variance_results.csv is per locus across taxa, not per taxon
+# across loci. When the alignments are absent the variance column is left missing and
+# script 23 drops it from the model with a warning.
+
+feng <- read.csv("../data/Feng_Table_1.csv", header = T, check.names = FALSE,
+                 stringsAsFactors = FALSE)
+feng$tip <- gsub(" ", "_", feng[["Latin name"]])
+feng$tip[feng$tip == "Nannopterum_harrisi"] <- "Phalacrocorax_harrisi"
+dat$gc_mean <- as.numeric(feng[["CG content(%)"]][match(dat$tip, feng$tip)])
+
+aln_dir <- "../data/postshrink_alignments"
+dat$gc_var <- NA_real_
+if (dir.exists(aln_dir)) {
+  files <- list.files(aln_dir, pattern = "fasta$", full.names = TRUE)
+  message("computing per-taxon GC across ", length(files), " alignments")
+  gc_list <- vector("list", length(files))
+  for (i in seq_along(files)) {
+    al <- try(read.dna(files[i], format = "fasta", as.matrix = TRUE), silent = TRUE)
+    if (inherits(al, "try-error")) next
+    gc_list[[i]] <- vapply(rownames(al), function(x) GC.content(al[x, ]), numeric(1))
+  }
+  codes <- unique(unlist(lapply(gc_list, names)))
+  gc_mat <- sapply(gc_list, function(x) x[codes])
+  rownames(gc_mat) <- codes
+  dat$gc_var <- apply(gc_mat[dat$code, , drop = FALSE], 1, var, na.rm = TRUE)
+} else {
+  message("alignments not found at ", aln_dir,
+          "; gc_var left as NA and dropped by script 23")
+}
+
+
+# ---- 5. Pair-level contrasts ----
+#
+# The contrast is the greater-flight-capacity sister minus the lesser one, matching the
+# direction convention of Table S1 and of moldiff in dnds_sisdifs_vol.Rdata.
+
+sp <- split(dat, dat$pair_id)
+contr <- do.call(rbind, lapply(sp, function(d) {
+  hi <- d[d$sister == "greater", ]
+  lo <- d[d$sister == "lesser", ]
+  data.frame(
+    pair_id   = hi$pair_id,
+    pair_no   = hi$pair_no,
+    habit     = hi$habit,
+    comptype  = sub("^.*-", "", hi$pair_id),
+    sp_lesser = lo$species,
+    sp_greater = hi$species,
+    d_loading = hi$loading_index - lo$loading_index,
+    d_shape   = hi$shape_index   - lo$shape_index,
+    d_hwi     = hi$hwi           - lo$hwi,
+    d_logmass = log(hi$mass_g)   - log(lo$mass_g),
+    d_gc_mean = hi$gc_mean       - lo$gc_mean,
+    flight_loss_pair = as.integer(any(d$flight_loss == 1)),
+    migration_pair   = as.integer(hi$migratory == 1 & lo$migratory == 0),
+    stringsAsFactors = FALSE
+  )
+}))
+rownames(contr) <- contr$pair_id
+
+
+# ---- 6. Attach genome-wide responses and assembly covariates ----
+
+load("../data/genome_flight_age_mass_data.Rdata")
+gc <- genomecomps[rownames(contr), ]
+keep <- c("age", "masdif", "logTotGenes", "logTotLen", "logCval",
+          "propAccelDs", "propAccelDn", "propAccelDnds",
+          "Complete.BUSCOs..C....", "Contig_N50..bp.", "Scaffold_N50..bp.")
+keep <- keep[keep %in% colnames(gc)]
+contr <- cbind(contr, gc[, keep])
+
+stopifnot(nrow(contr) == 42)
+
+write.csv(dat,   "../output/traits_per_taxon.csv", row.names = FALSE)
+write.csv(contr, "../output/traits_contrasts.csv", row.names = FALSE)
+
+cat("\ntraits_per_taxon.csv :", nrow(dat), "taxa\n")
+cat("traits_contrasts.csv :", nrow(contr), "pairs\n")
+cat("\nloading index by flight ability (back-transformed median):\n")
+print(round(tapply(dat$loading_index, dat$ability, function(x) exp(median(x))), 2))
+cat("\nloading index by primary flight style:\n")
+print(round(sort(tapply(dat$loading_index, dat$style, function(x) exp(median(x)))), 2))
+cat("\nbinary phenotypes: flight_loss =", sum(dat$flight_loss),
+    "taxa, migratory =", sum(dat$migratory), "taxa\n")
+cat("pairs: flight loss =", sum(contr$flight_loss_pair),
+    ", migration gain =", sum(contr$migration_pair), "\n")
