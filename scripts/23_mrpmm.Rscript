@@ -4,28 +4,68 @@
 #
 # Replaces the frequentist and Bayesian path analyses of the previous version. Those
 # fitted a directed chain chosen in advance and compared seven such chains. An MR-PMM
-# instead estimates the full covariance among the traits and splits it into a part that
-# follows the phylogeny and a part that does not, which is the question the path analysis
-# was reaching for. Following Halliwell, Holland and Yates (2025).
+# instead estimates the full covariance among traits and splits it into a part following
+# the phylogeny and a part that does not. Following Halliwell, Holland and Yates (2025).
 #
-# RESPONSES. Six, all per taxon: ln dN, ln dS, ln genome length, ln gene count, the
-# flight index, and mean GC.
+# ---------------------------------------------------------------------------------
+# WHY THE FIRST VERSION FAILED, AND WHAT CHANGED
 #
-# Omega is deliberately NOT a seventh response. ln(omega) = ln(dN) - ln(dS) to within the
-# difference between a median of ratios and a ratio of medians, so including it would make
-# the response covariance near-singular. It is recovered afterwards from the posterior as
-# the difference between the dN and dS effects, which is exact in the model's own terms.
+# The first specification used ln dN and ln dS as separate responses and would not
+# converge: Rhat 1.99, minimum ESS ratio 0.01, 40 divergent transitions, and a full hour
+# without finishing on production settings. Two measured pathologies explain it.
+#
+#   1. ln dN and ln dS correlate at r = 0.970 across taxa. Both are dominated by terminal
+#      branch length, so the model was asked to estimate a correlation against the
+#      boundary of the correlation matrix, where sampling collapses.
+#
+#   2. Pagel's lambda was at or above 1 for ln dN (1.04), ln dS (1.02) and the flight
+#      index (0.96). Lambda >= 1 means the non-phylogenetic variance wants to be zero, so
+#      a residual correlation matrix was being estimated from variances pinned at the
+#      floor. That is the classic funnel.
+#
+# The fix is to use dS and OMEGA rather than dN and dS. Omega is their ratio, so it
+# carries exactly the variation left after the shared branch-length component is removed.
+# Measured: collinearity falls from 0.970 to 0.505, and omega has lambda = 0.000, giving
+# the residual term real variance to estimate instead of a boundary.
+#
+#   dS     carries the phylogenetically structured mutation-rate signal (lambda 0.80)
+#   omega  carries the unstructured selection signal                    (lambda 0.00)
+#
+# ---------------------------------------------------------------------------------
+# RESPONSES
+#
+# Seven per taxon, chosen on measured collinearity, skew and phylogenetic signal rather
+# than convenience. Maximum pairwise |r| is 0.57.
+#
+#   ln_ds          genome-wide synonymous rate           lambda 0.80
+#   ln_w           genome-wide omega                     lambda 0.00
+#   loading_index  ln(mass / wing length^2)              lambda 0.85
+#   ln_len         assembly length                       lambda 0.60
+#   ln_genes       gene count                            lambda 0.31
+#   gc             GC content                            lambda 0.91
+#   ln_intronlen   mean intron length                    lambda 0.00
+#
+# Dropped after audit: ln dN (r = 0.97 with ln dS, and omega now carries the contrast);
+# number of single-exon genes (r = 0.80 with gene count).
 #
 # FIXED EFFECTS. BUSCO completeness only. Assembly quality is a nuisance that does not
 # evolve on the tree, so it belongs here and not among the responses, which is the point
-# NEE Reviewer 1 raised. Body mass is NOT a fixed effect because it is inside the flight
-# index, which is a response; including both would be close to circular.
+# NEE Reviewer 1 raised. Body mass is NOT a fixed effect because it sits inside the
+# flight index, which is a response.
 #
-# Requires: brms, ape
+# RESIDUAL CORRELATION is retained, by decision, so that the phylogenetic and residual
+# split is estimated rather than assumed. With seven responses this is 21 phylogenetic
+# plus 21 residual correlations on 82 taxa, which is ambitious. The convergence guard
+# below refuses to let a bad fit pass silently.
+#
+# THE GREAT AUK is excluded. Its "assembly" is 19 Mb of reads mapped to the razorbill, so
+# its genome length and gene count are mapping artefacts rather than measurements.
+#
+# Requires: brms, ape, phytools
 # In:  ../output/traits_per_taxon.csv, ../data/dnds_branches.Rdata,
 #      ../data/dated.auk.tre, ../data/Feng_Table_1.csv
 # Out: ../output/mrpmm_fit.Rdata, ../output/mrpmm_correlations.csv,
-#      ../figures/Fig3_mrpmm.pdf
+#      ../output/mrpmm_diagnostics.csv, ../figures/Fig3_mrpmm.pdf
 
 library(brms)
 library(ape)
@@ -50,15 +90,17 @@ load("../data/dnds_branches.Rdata")
 
 # ---- 1. Per-taxon molecular rates ----
 #
-# dnres, dsres and dndsres are loci by taxa matrices of terminal-branch rates. The median
-# across loci is the taxon's genome-wide rate.
+# dnres, dsres and dndsres are loci by taxa matrices of TERMINAL-BRANCH rates: entry
+# [g, i] is the rate on taxon i's terminal branch for gene g. The per-taxon value below is
+# the median of that across roughly 11,000 genes, which is a robust genome-wide summary
+# and avoids the long right tail that a mean would track.
 
 rate_of <- function(m) {
   v <- apply(m[, tr$code, drop = FALSE], 2, median, na.rm = TRUE)
   log(v)
 }
-tr$ln_dn <- rate_of(dnres)
 tr$ln_ds <- rate_of(dsres)
+tr$ln_w  <- rate_of(dndsres)
 cat("per-taxon rates from", nrow(dnres), "loci; median loci per taxon:",
     median(colSums(!is.na(dsres[, tr$code]))), "\n")
 
@@ -66,47 +108,82 @@ cat("per-taxon rates from", nrow(dnres), "loci; median loci per taxon:",
 # ---- 2. Per-taxon genome architecture and assembly quality ----
 
 f <- read.csv("../data/Feng_Table_1.csv", check.names = FALSE, stringsAsFactors = FALSE)
-f$tip <- gsub(" ", "_", f[["Latin name"]])
-f$tip[f$tip == "Nannopterum_harrisi"] <- "Phalacrocorax_harrisi"
-# a few tips differ only in the generic name; fall back to the specific epithet
-idx <- match(tr$tip, f$tip)
-miss <- which(is.na(idx))
-for (i in miss) {
-  ep <- sub("^[^_]+_", "", tr$tip[i])
-  cand <- which(sub("^[^_]+_", "", f$tip) == ep)
-  if (length(cand) == 1) idx[i] <- cand
+
+# Matching our tips to Feng needs two rules, both established by inspection:
+#   (a) Feng carries four TRINOMIALS, including Aquila chrysaetos canadensis and Strix
+#       occidentalis caurina. Matching on the full name silently loses those taxa, which
+#       is why an earlier version dropped them. Compare the first two words only.
+#   (b) Nannopterum harrisi in Feng is Phalacrocorax harrisi on our tree.
+# Together these recover 83 of 84; only Pinguinus is absent, as expected.
+binom <- function(x) {
+  w <- strsplit(trimws(x), "[ _]+")
+  vapply(w, function(v) paste(v[1:2], collapse = "_"), character(1))
 }
+f$bin <- binom(f[["Latin name"]])
+f$bin[f$bin == "Nannopterum_harrisi"] <- "Phalacrocorax_harrisi"
+idx <- match(binom(tr$tip), f$bin)
+cat("matched to Feng:", sum(!is.na(idx)), "of", nrow(tr),
+    "| unmatched:", paste(tr$species[is.na(idx)], collapse = ", "), "\n")
 g <- f[idx, ]
 
 num <- function(x) as.numeric(gsub(",", "", x))
-tr$ln_len   <- log(num(g[["Total_Len (bp)"]]))
-tr$ln_genes <- log(num(g[["Number of total gene"]]))
-tr$busco    <- num(g[["Complete BUSCOs (C, %)"]])
-
-cat("taxa with no assembly record:",
-    paste(tr$tip[is.na(tr$ln_len)], collapse = ", "), "\n")
+tr$ln_len       <- log(num(g[["Total_Len (bp)"]]))
+tr$ln_genes     <- log(num(g[["Number of total gene"]]))
+tr$gc           <- num(g[["CG content(%)"]])
+tr$ln_intronlen <- log(num(g[["Mean intron length (bp)"]]))
+tr$busco        <- num(g[["Complete BUSCOs (C, %)"]])
 
 
 # ---- 3. Model frame ----
 
-# Four responses by default. Six on 81 taxa leaves the phylogenetic and residual
-# correlation matrices weakly identified and sampling becomes impractically slow: a
-# 2-chain 400-iteration test run had not finished in 30 minutes. Set MRPMM_FULL=TRUE to
-# add gene count and mean GC once the four-response model is understood.
-vars <- c("ln_dn", "ln_ds", "ln_len", "loading_index")
-if (as.logical(Sys.getenv("MRPMM_FULL", "FALSE"))) vars <- c(vars, "ln_genes", "gc_mean")
-if (all(is.na(tr$gc_var))) {
-  message("gc_var is empty (alignments absent), so it is not a response. ",
-          "Rerun script 14 with ../data/postshrink_alignments/ present to include it.")
-} else {
-  vars <- c(vars, "gc_var")
-}
-
+vars <- c("ln_ds", "ln_w", "loading_index", "ln_len", "ln_genes", "gc", "ln_intronlen")
 dd <- tr[, c("tip", "code", "species", "ability", "style", vars, "busco")]
 dd <- dd[complete.cases(dd[, c(vars, "busco")]), ]
 dropped <- setdiff(tr$tip, dd$tip)
 cat("taxa in the model:", nrow(dd), "of 84\n")
 if (length(dropped)) cat("dropped for missing data:", paste(dropped, collapse = ", "), "\n")
+
+# ---- 3b. Pre-fit diagnostics ----
+#
+# Every response is checked for extreme skew and for phylogenetic signal BEFORE fitting.
+# Both drove the failure of the first specification, so they are reported rather than
+# assumed. Skew beyond about |1.5| or kurtosis beyond about 5 is flagged.
+
+skew <- function(x) { x <- x[is.finite(x)]; mean((x - mean(x))^3) / sd(x)^3 }
+kurt <- function(x) { x <- x[is.finite(x)]; mean((x - mean(x))^4) / sd(x)^4 - 3 }
+
+phy_all <- read.tree("../data/dated.auk.tre")
+diag_tab <- do.call(rbind, lapply(vars, function(v) {
+  x <- dd[[v]]
+  p2 <- drop.tip(phy_all, setdiff(phy_all$tip.label, dd$tip))
+  if (!is.ultrametric(p2)) p2 <- phytools::force.ultrametric(p2, method = "extend")
+  xx <- setNames(as.numeric(scale(x)), dd$tip)[p2$tip.label]
+  lam <- tryCatch(phytools::phylosig(p2, xx, method = "lambda")$lambda,
+                  error = function(e) NA_real_)
+  data.frame(variable = v, n = sum(is.finite(x)), skew = skew(x), kurtosis = kurt(x),
+             lambda = lam, row.names = NULL)
+}))
+diag_tab$flag <- ifelse(abs(diag_tab$skew) > 1.5 | diag_tab$kurtosis > 5, "SKEWED", "")
+write.csv(diag_tab, "../output/mrpmm_diagnostics.csv", row.names = FALSE)
+cat("\nResponse diagnostics:\n\n")
+print(format(diag_tab, digits = 3), row.names = FALSE)
+
+cm <- cor(dd[, vars])
+off <- cm[upper.tri(cm)]
+cat("\nmax pairwise |r| among responses:", round(max(abs(off)), 3), "\n")
+hi <- which(abs(cm) > 0.7 & upper.tri(cm), arr.ind = TRUE)
+if (nrow(hi)) {
+  cat("WARNING, collinear response pairs above 0.7:\n")
+  for (i in seq_len(nrow(hi)))
+    cat("   ", vars[hi[i, 1]], "~", vars[hi[i, 2]], round(cm[hi[i, 1], hi[i, 2]], 3), "\n")
+}
+if (any(diag_tab$flag == "SKEWED")) {
+  cat("\nNOTE: ", paste(diag_tab$variable[diag_tab$flag == "SKEWED"], collapse = ", "),
+      " is skewed. For the flight index this is driven by the wing-propelled divers and\n",
+      "the ratites, which are real biology rather than error, but a Gaussian response is\n",
+      "an approximation there and the posterior should be checked against it.\n", sep = "")
+}
+
 
 # Standardise so that the covariance matrices are correlations and the priors are sane.
 for (v in vars) dd[[v]] <- as.numeric(scale(dd[[v]]))
