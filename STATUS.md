@@ -81,8 +81,21 @@ multiplying mass. On the index it is second lowest of all 84 taxa, above only
 
 ## Scripts
 
-Done and tested: `01` to `13` (carried over), `14`, `15`, `16`, `17`, `18`, `19`, `20`, `22`.
-To write: `21_gsea`, `24_figures`.
+Done and tested: `01` to `13` (carried over), `14` to `22` except `23`.
+To write: `24_figures`.
+
+**RERconverge is not needed and is not used.** HyphAeon's gene p-value already uses the
+RERconverge null (Brownian-motion permulations), so installing the package would supply no
+new null. What it would supply is a different *statistic*, and that is worth having, since
+HyphAeon is mammal-trained with avian transfer benchmarked only on mitochondrial data.
+Script 20 therefore computes the comparator directly from `dnds_branches.Rdata`: relative
+evolutionary rates recovered by double-centring the log per-locus per-taxon rates, which
+is the residual RERconverge models, then correlated with each trait. 13,625 genes in
+minutes, from PAML rates we generated ourselves. No external package, no treesObj build.
+
+`clusterProfiler` 4.18.4 and `fgsea` 1.36.2 are now installed. Script 21 builds gene sets
+from `goterms.csv` directly (3,025 GO terms, 389 within the 10 to 500 size bounds), so no
+OrgDb is needed and the annotation is identical to the previous submission.
 
 **`23_mrpmm` does not converge as specified.** A short run gave max Rhat 1.99, minimum ESS
 ratio 0.01 and 40 divergent transitions, so the correlations it prints must not be

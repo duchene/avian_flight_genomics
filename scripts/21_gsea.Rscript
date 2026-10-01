@@ -1,0 +1,150 @@
+# 21_gsea.Rscript
+#
+# Gene-set enrichment on the continuous per-gene statistic, for each of the three
+# phenotypes.
+#
+# WHY GSEA RATHER THAN OVER-REPRESENTATION. The previous submission ran an
+# over-representation analysis on the top 10 percent of genes and reported enrichment at
+# FDR q < 0.5. Two referees attacked exactly that: nothing passed at the 1 or 5 percent
+# cut, the result appeared only at 10 percent under a permissive threshold, and the term
+# "metabolic pathways" was significant in all four scenarios. GSEA removes the arbitrary
+# threshold entirely by ranking every gene and asking whether a set is concentrated at
+# either end. There is no cut to tune, and the background is the full ranked list rather
+# than a set chosen by hand.
+#
+# RANKING STATISTIC. The signed association_rho of the highest-scoring site in each gene,
+# computed in script 20. HyphAeon's gene-level p-value and max_assoc are both unsigned, so
+# neither can order genes by direction, and GSEA needs a signed ranking. A positive value
+# means the trait-rate association runs in the direction of the phenotype.
+#
+# Reported at q < 0.05. A null result is reported as a null result.
+#
+# Requires: clusterProfiler (Bioconductor). fgsea alone would also serve.
+# In:  ../output/per_gene_statistics.csv, ../data/goterms.csv
+# Out: ../output/gsea_results.csv, ../figures/Fig4_gsea.pdf
+
+suppressMessages(library(clusterProfiler))
+
+MIN_SET <- 10      # sets smaller than this are unstable
+MAX_SET <- 500     # sets larger than this are too vague to interpret
+QCUT    <- 0.05
+
+dir.create("../output", showWarnings = FALSE)
+dir.create("../figures", showWarnings = FALSE)
+
+
+# ---- 1. Gene sets from the project's own annotation ----
+#
+# goterms.csv carries a free-text GO field per locus. Parsing it directly avoids an
+# OrgDb dependency and keeps the annotation identical to the previous version, so any
+# difference in result comes from the method and not from a change of gene sets.
+
+go <- read.csv("../data/goterms.csv", stringsAsFactors = FALSE, row.names = 1)
+go <- go[!is.na(go$fullgo) & !grepl("^\\s*NA\\s*$", go$fullgo), ]
+rx <- "GO:[0-9]{7}; [^;]+; (function|process|component)"
+hits <- regmatches(go$fullgo, gregexpr(rx, go$fullgo))
+
+t2g <- do.call(rbind, lapply(seq_along(hits), function(i) {
+  if (!length(hits[[i]])) return(NULL)
+  data.frame(term = sub(";.*$", "", hits[[i]]), gene = go$ID[i], stringsAsFactors = FALSE)
+}))
+t2n <- unique(data.frame(
+  term = sub(";.*$", "", unlist(hits)),
+  name = sub("^GO:[0-9]{7}; ", "", sub("; (function|process|component)$", "", unlist(hits))),
+  stringsAsFactors = FALSE))
+t2n <- t2n[!duplicated(t2n$term), ]
+
+cat("gene sets:", length(unique(t2g$term)), "GO terms over",
+    length(unique(t2g$gene)), "loci,", nrow(t2g), "term-gene pairs\n")
+sz <- table(t2g$term)
+cat("sets within size bounds (", MIN_SET, "to", MAX_SET, "):",
+    sum(sz >= MIN_SET & sz <= MAX_SET), "\n\n")
+
+
+# ---- 2. Ranked lists ----
+
+res <- read.csv("../output/per_gene_statistics.csv", stringsAsFactors = FALSE)
+res$key <- sub("[.]c123.*$", "", res$gene)
+
+rank_of <- function(ph) {
+  d <- res[res$phenotype == ph & is.finite(res$top_rho), ]
+  if (!nrow(d)) return(NULL)
+  d <- d[!duplicated(d$key), ]
+  v <- setNames(d$top_rho, d$key)
+  sort(v, decreasing = TRUE)
+}
+
+
+# ---- 3. GSEA ----
+
+run_one <- function(ph) {
+  gl <- rank_of(ph)
+  if (is.null(gl) || length(gl) < 100) {
+    cat("skipping", ph, ": only", length(gl), "genes with a statistic\n")
+    return(NULL)
+  }
+  annotated <- sum(names(gl) %in% t2g$gene)
+  cat(sprintf("%-11s %d genes ranked, %d annotated, rho range %.3f to %.3f\n",
+              ph, length(gl), annotated, min(gl), max(gl)))
+  e <- tryCatch(
+    GSEA(gl, TERM2GENE = t2g, TERM2NAME = t2n, minGSSize = MIN_SET,
+         maxGSSize = MAX_SET, pvalueCutoff = 1, eps = 0, seed = TRUE, verbose = FALSE),
+    error = function(err) { cat("  GSEA failed:", conditionMessage(err), "\n"); NULL })
+  if (is.null(e) || !nrow(as.data.frame(e))) return(NULL)
+  df <- as.data.frame(e)
+  df$phenotype <- ph
+  df
+}
+
+all_res <- do.call(rbind, Filter(Negate(is.null), lapply(unique(res$phenotype), run_one)))
+if (is.null(all_res)) {
+  cat("\nNo GSEA results produced. Run 19_hyphaeon_run.py over the full gene set first.\n")
+  quit(save = "no")
+}
+write.csv(all_res, "../output/gsea_results.csv", row.names = FALSE)
+
+cat("\n", strrep("=", 78), "\n", sep = "")
+sig <- all_res[all_res$p.adjust < QCUT, ]
+if (nrow(sig)) {
+  cat("Enriched sets at q <", QCUT, ":\n\n")
+  print(format(sig[order(sig$p.adjust),
+                   c("phenotype", "ID", "Description", "setSize", "NES",
+                     "pvalue", "p.adjust")], digits = 3), row.names = FALSE)
+} else {
+  cat("No gene set is enriched at q < ", QCUT, " for any phenotype.\n\n", sep = "")
+  cat("This is the result, not a failure of the analysis. The previous submission\n")
+  cat("reported enrichment only by cutting at the top 10 percent of genes and\n")
+  cat("relaxing the threshold to q < 0.5, which two referees rejected. GSEA uses no\n")
+  cat("cut, so a null here is a null.\n\n")
+  cat("Closest sets by adjusted p-value, for reference only:\n\n")
+  print(format(head(all_res[order(all_res$p.adjust),
+                            c("phenotype", "ID", "Description", "setSize", "NES",
+                              "pvalue", "p.adjust")], 10), digits = 3), row.names = FALSE)
+}
+cat(strrep("=", 78), "\n")
+
+
+# ---- 4. Figure ----
+
+pdf("../figures/Fig4_gsea.pdf", width = 10, height = 6)
+phs <- unique(all_res$phenotype)
+par(mfrow = c(1, max(1, length(phs))), mar = c(4.2, 12, 2.8, 1), tcl = -0.25,
+    mgp = c(2.5, 0.5, 0), cex.axis = 0.8)
+for (ph in phs) {
+  d <- all_res[all_res$phenotype == ph, ]
+  d <- head(d[order(d$p.adjust), ], 12)
+  if (!nrow(d)) { plot.new(); next }
+  d <- d[order(d$NES), ]
+  cols <- ifelse(d$p.adjust < QCUT, "#C4622D", "#9AA5AB")
+  b <- barplot(d$NES, horiz = TRUE, col = cols, border = NA, xlab = "",
+               main = ph, font.main = 1, cex.main = 1, las = 1,
+               names.arg = rep("", nrow(d)))
+  axis(2, at = b, labels = substr(d$Description, 1, 40), las = 1, tick = FALSE,
+       cex.axis = 0.62)
+  abline(v = 0, col = "grey50")
+  mtext("normalised enrichment score", side = 1, line = 2.3, cex = 0.72)
+  box(bty = "l", col = "grey45")
+}
+dev.off()
+cat("\nwritten ../figures/Fig4_gsea.pdf\n")
+cat("orange bars pass q <", QCUT, "; grey bars do not\n")

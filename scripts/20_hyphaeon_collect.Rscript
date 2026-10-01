@@ -16,16 +16,17 @@
 # statistic answers the referee asking whether genes are being selected for downstream
 # analysis by their base composition. A null correlation is the result being sought.
 #
-# CHECK 2, RERconverge. HyphAeon's gene p-value is a Brownian-motion permulation p-value,
-# the same null RERconverge uses, so running RERconverge on the same phenotypes gives a
-# peer-reviewed parallel. Reported as rank concordance. This is skipped with a message if
-# RERconverge is not installed, since it is not on CRAN.
+# CHECK 2, a non-neural comparator. The RERconverge package is not installed and is not
+# needed: HyphAeon already uses its null. What is worth having is an independent
+# STATISTIC, so relative evolutionary rates are computed directly from our own PAML
+# branch rates and correlated with the trait. Reported as rank concordance.
 #
-# Requires: jsonlite; optionally RERconverge
+# Requires: jsonlite
 # In:  ../output/hyphaeon_out/<phenotype>/*.json
 #      ../data/aitchison_variance_results.csv
 # Out: ../output/per_gene_statistics.csv
 #      ../output/hyphaeon_base_composition_check.csv
+#      ../output/rer_comparator.csv
 #      ../figures/FigS_hyphaeon_qc.pdf
 
 library(jsonlite)
@@ -123,18 +124,76 @@ cat("A null correlation is the result being sought.\n\n")
 print(format(bc, digits = 3), row.names = FALSE)
 
 
-# ---- 3. RERconverge parallel ----
+# ---- 3. Non-neural comparator, computed from our own branch rates ----
+#
+# The RERconverge PACKAGE is not needed here, and installing it would be close to
+# redundant: HyphAeon's gene p-value already uses the RERconverge null, Brownian-motion
+# permulations, so re-running it would not supply a different null.
+#
+# What is NOT shared is the statistic. HyphAeon correlates transformer attributions with
+# the trait; RERconverge correlates relative evolutionary rates derived from branch
+# lengths. Since HyphAeon is mammal-trained and its avian transfer is benchmarked only on
+# mitochondrial data at rho = 0.403, an independent non-neural statistic is worth having,
+# and two referees rejected the previous submission partly for resting on a single
+# non-standard analysis.
+#
+# That comparator is free. dnds_branches.Rdata holds per-locus per-taxon terminal-branch
+# rates, which is the input RERconverge builds internally. Relative evolutionary rate is
+# recovered by double-centring the log rates, that is by removing an additive gene effect
+# and taxon effect, which leaves exactly the residual RERconverge models. Correlating that
+# against the trait across taxa gives a per-gene statistic in minutes, from rates we
+# generated with PAML and already trust.
 
-if (requireNamespace("RERconverge", quietly = TRUE)) {
-  cat("\nRERconverge is installed. Run the parallel analysis on the same three\n",
-      "phenotypes and merge on gene, then report rank concordance against p_perm.\n")
-  # Left as an explicit step rather than run blind: RERconverge needs the gene trees
-  # read into a treesObj, which is a long computation and belongs in its own session.
-} else {
-  cat("\nRERconverge is not installed, so the peer-reviewed parallel is not run.\n",
-      "Install with: remotes::install_github('nclark-lab/RERconverge')\n",
-      "It matters because HyphAeon is mammal-trained and its avian transfer is\n",
-      "benchmarked only on mitochondrial data, so an independent check is worth having.\n")
+comparator <- function() {
+  load("../data/dnds_branches.Rdata")
+  tr <- read.csv("../output/traits_per_taxon.csv", stringsAsFactors = FALSE)
+  m <- dsres[, intersect(colnames(dsres), tr$code), drop = FALSE]
+  m[!is.finite(m) | m <= 0] <- NA
+  lm_ <- log(m)
+  # double-centre: remove gene means and taxon means, leaving the relative rate
+  rer <- sweep(sweep(lm_, 1, rowMeans(lm_, na.rm = TRUE), "-"),
+               2, colMeans(lm_, na.rm = TRUE) - mean(lm_, na.rm = TRUE), "-")
+  traits <- list(loading = setNames(tr$loading_index, tr$code),
+                 flightloss = setNames(as.numeric(tr$flight_loss), tr$code),
+                 migration = setNames(as.numeric(tr$migratory), tr$code))
+  do.call(rbind, lapply(names(traits), function(ph) {
+    x <- traits[[ph]][colnames(rer)]
+    ok <- rowSums(!is.na(rer)) >= 20
+    sub <- rer[ok, , drop = FALSE]
+    rho <- apply(sub, 1, function(y) suppressWarnings(
+      cor(y, x, method = "spearman", use = "complete.obs")))
+    n <- apply(sub, 1, function(y) sum(!is.na(y) & !is.na(x)))
+    tstat <- rho * sqrt((n - 2) / (1 - rho^2))
+    pv <- 2 * pt(-abs(tstat), n - 2)
+    data.frame(key = sub("[.]c123.*$", "", rownames(sub)), phenotype = ph,
+               rer_rho = rho, rer_p = pv, rer_n = n,
+               rer_q = p.adjust(pv, method = "BH"), row.names = NULL)
+  }))
+}
+
+cat("\nComputing the non-neural comparator from dnds_branches.Rdata\n")
+cmp <- tryCatch(comparator(), error = function(e) {
+  cat("  comparator failed:", conditionMessage(e), "\n"); NULL })
+
+if (!is.null(cmp)) {
+  write.csv(cmp, "../output/rer_comparator.csv", row.names = FALSE)
+  cat("  per-gene relative-rate statistics for", length(unique(cmp$key)), "genes\n")
+  conc <- do.call(rbind, lapply(unique(res$phenotype), function(ph) {
+    d <- merge(res[res$phenotype == ph, c("key", "top_rho", "p_perm")],
+               cmp[cmp$phenotype == ph, c("key", "rer_rho", "rer_p")], by = "key")
+    if (nrow(d) < 10) return(NULL)
+    data.frame(phenotype = ph, n = nrow(d),
+               rho_statistic = suppressWarnings(cor(d$top_rho, d$rer_rho,
+                                                    method = "spearman")),
+               rho_pvalue = suppressWarnings(cor(d$p_perm, d$rer_p, method = "spearman")),
+               row.names = NULL)
+  }))
+  if (!is.null(conc)) {
+    cat("\n  Rank concordance between HyphAeon and the relative-rate comparator:\n\n")
+    print(format(conc, digits = 3), row.names = FALSE)
+    cat("\n  Low concordance is informative, not a bug: the two statistics measure\n")
+    cat("  different things and only share a null.\n")
+  }
 }
 
 
