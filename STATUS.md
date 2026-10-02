@@ -107,16 +107,43 @@ the ratites. Real biology, but a Gaussian response is an approximation there. Ma
 Done and tested: `01` to `22`. To write: `24_figures`.
 
 Running now: `19_hyphaeon_run.py` for all three phenotypes in parallel, 14,124 genes each,
-1000 permulations, `--resume`. About 20 hours wall. Then `20`, `21`.
+1000 permulations, `--resume`. At about 69% after roughly 19 hours; the rate settled to
+about 7 s per gene rather than 5.07 because three processes contend on 16 cores. Roughly
+8 more hours. Then `20`, `21`.
 
-`23_mrpmm` is on its second specification. The first used ln dN and ln dS and gave Rhat
-1.99, ESS ratio 0.01, 40 divergences, and an hour without finishing. Causes measured: ln dN
-and ln dS correlate at r = 0.970, and lambda was at or above 1 for three of four responses,
-so residual variance wanted to be zero. Now uses **dS and omega** (collinearity 0.505,
-omega lambda 0.00), seven responses, tree coerced ultrametric, tighter prior on the
-phylogenetic sd, pre-fit diagnostics, and a warning when Rhat exceeds 1.05. **If it still
-fails, the options in order are: drop residual correlation; cut to four responses; fix the
-phylogenetic signal rather than estimating it per response.**
+**The flightloss phenotype has 92 legitimate failures**, all `Insufficient foreground taxa
+(1)`. The binary flight-loss phenotype has only 7 positives across 84 taxa, so genes with
+sparse taxon sampling contain just one and cannot support a foreground/background test.
+That is the n = 7 limit of the design showing up gene by gene, not a bug. loading and
+migration have zero failures.
+
+`23_mrpmm` is on its **third** specification, and the first two are documented failures.
+
+| version | responses | rescor | result |
+|---|---|---|---|
+| 1 | ln dN, ln dS, ln len, flight index | TRUE | Rhat 1.99, 40 divergences, an hour without finishing |
+| 2 | dS, omega + 5 more (7 total) | TRUE | Rhat 1.45, ESS ratio 0.007, 25 divergences, low BFMI |
+| 3 | same 7 | **FALSE** | running |
+
+Version 1 failed because ln dN and ln dS correlate at r = 0.970 and lambda was at or above
+1 for three of four responses. Replacing them with **dS and omega** cut collinearity to
+0.505 and gave omega lambda 0.00, which helped but was not enough.
+
+Version 2's low BFMI is the diagnostic that matters: the sampler cannot move through the
+region where phylogenetic and residual variance trade off. Lambda is 1.03 for ln dS, 0.96
+for the flight index and 0.91 for GC, so three of seven responses have essentially no
+non-phylogenetic variance, and 21 residual correlations were being estimated from variances
+pinned at the floor.
+
+**Version 2 is kept as evidence**, by decision, under the `*_rescor` suffix:
+`output/mrpmm_fit_rescor.Rdata`, `mrpmm_correlations_rescor.csv`,
+`mrpmm_diagnostics_rescor.csv`, `mrpmm_rescor_run.log`,
+`figures/Fig3_mrpmm_rescor.pdf`. Reproduce with `MRPMM_RESCOR=TRUE`.
+
+Version 3 drops `set_rescor`, removing 21 parameters the data cannot supply. The cost,
+which belongs in the paper rather than buried in a comment, is that the split between
+phylogenetic and residual covariance becomes partly assumed rather than estimated. If it
+still fails, cut the response set to three or four.
 
 ## Timings, all measured
 

@@ -53,10 +53,25 @@
 # NEE Reviewer 1 raised. Body mass is NOT a fixed effect because it sits inside the
 # flight index, which is a response.
 #
-# RESIDUAL CORRELATION is retained, by decision, so that the phylogenetic and residual
-# split is estimated rather than assumed. With seven responses this is 21 phylogenetic
-# plus 21 residual correlations on 82 taxa, which is ambitious. The convergence guard
-# below refuses to let a bad fit pass silently.
+# RESIDUAL CORRELATION IS OFF.
+#
+# It was retained at first so that the phylogenetic and residual split would be estimated
+# rather than assumed. That version does not converge. Fitted with seven responses and
+# set_rescor(TRUE) it gave max Rhat 1.45, minimum ESS ratio 0.007, 25 divergent
+# transitions and low Bayesian Fraction of Missing Information on both chains. The
+# artefacts are retained under the *_rescor suffix as evidence, and the run is
+# reproducible with MRPMM_RESCOR=TRUE.
+#
+# The low BFMI is the diagnostic that matters. It is the signature of a sampler unable to
+# move through the region where phylogenetic and residual variance trade off against each
+# other. Measured lambda is 1.03 for ln dS, 0.96 for the flight index and 0.91 for GC, so
+# three of seven responses have essentially no non-phylogenetic variance. Asking for 21
+# residual correlations among variances pinned at the floor is asking for parameters the
+# data cannot supply.
+#
+# Dropping the term removes those 21 parameters. The cost, which belongs in the paper
+# rather than buried here, is that the split between phylogenetic and residual covariance
+# becomes partly assumed rather than estimated.
 #
 # THE GREAT AUK is excluded. Its "assembly" is 19 Mb of reads mapped to the razorbill, so
 # its genome length and gene count are mapping artefacts rather than measurements.
@@ -79,6 +94,11 @@ SEED   <- 42
 # Set QUICK to TRUE for a compile-and-run check rather than a production fit.
 QUICK  <- as.logical(Sys.getenv("MRPMM_QUICK", "FALSE"))
 if (QUICK) { CHAINS <- 2; ITER <- 600; WARMUP <- 300 }
+
+# Residual correlation is OFF by default. See the block below for why. Set MRPMM_RESCOR=TRUE
+# to reproduce the version that fails, which is retained as evidence.
+RESCOR <- as.logical(Sys.getenv("MRPMM_RESCOR", "FALSE"))
+SUF    <- if (RESCOR) "_rescor" else "_norescor"
 
 dir.create("../output", showWarnings = FALSE)
 dir.create("../figures", showWarnings = FALSE)
@@ -164,7 +184,7 @@ diag_tab <- do.call(rbind, lapply(vars, function(v) {
              lambda = lam, row.names = NULL)
 }))
 diag_tab$flag <- ifelse(abs(diag_tab$skew) > 1.5 | diag_tab$kurtosis > 5, "SKEWED", "")
-write.csv(diag_tab, "../output/mrpmm_diagnostics.csv", row.names = FALSE)
+write.csv(diag_tab, paste0("../output/mrpmm_diagnostics", SUF, ".csv"), row.names = FALSE)
 cat("\nResponse diagnostics:\n\n")
 print(format(diag_tab, digits = 3), row.names = FALSE)
 
@@ -214,7 +234,7 @@ stopifnot(identical(dd$phylo, rownames(A)))
 bf_list <- lapply(vars, function(v) {
   bf(as.formula(paste0(v, " ~ busco + (1|p|gr(phylo, cov = A))")))
 })
-form <- Reduce(`+`, bf_list) + set_rescor(TRUE)
+form <- Reduce(`+`, bf_list) + set_rescor(RESCOR)
 
 # In a multivariate model every population-level prior is response-specific, so they are
 # built per response rather than declared once. lkj(2) on both correlation matrices mildly
@@ -228,16 +248,17 @@ pr <- c(
   # is where the chains failed to mix (Rhat 1.99 on a short run).
   do.call(c, lapply(resp_nm, function(r) prior_string("student_t(3, 0, 1)", class = "sd", resp = r))),
   prior(lkj(2), class = "cor"),
-  prior(lkj(2), class = "rescor"))
+  if (RESCOR) prior(lkj(2), class = "rescor") else NULL)
 
-cat("\nfitting", length(vars), "responses on", nrow(dd), "taxa",
-    if (QUICK) "(QUICK mode)" else "", "\n")
+cat("\nfitting", length(vars), "responses on", nrow(dd), "taxa |",
+    if (RESCOR) "WITH residual correlation" else "no residual correlation",
+    if (QUICK) "| QUICK mode" else "", "\n")
 fit <- brm(form, data = dd, data2 = list(A = A), prior = pr,
            chains = CHAINS, iter = ITER, warmup = WARMUP, seed = SEED,
            control = list(adapt_delta = ADAPT, max_treedepth = 12),
            cores = min(CHAINS, parallel::detectCores()))
 
-save(fit, dd, A, vars, file = "../output/mrpmm_fit.Rdata")
+save(fit, dd, A, vars, file = paste0("../output/mrpmm_fit", SUF, ".Rdata"))
 
 
 # ---- 5. Convergence ----
@@ -272,10 +293,11 @@ grab <- function(pattern) {
   }))
 }
 phy_cor <- grab("^cor_phylo__")
-res_cor <- grab("^rescor__")
-cors <- rbind(cbind(level = "phylogenetic", phy_cor), cbind(level = "residual", res_cor))
+res_cor <- if (RESCOR) grab("^rescor__") else NULL
+cors <- if (is.null(res_cor)) cbind(level = "phylogenetic", phy_cor) else
+  rbind(cbind(level = "phylogenetic", phy_cor), cbind(level = "residual", res_cor))
 cors$credible <- cors$lwr > 0 | cors$upr < 0
-write.csv(cors, "../output/mrpmm_correlations.csv", row.names = FALSE)
+write.csv(cors, paste0("../output/mrpmm_correlations", SUF, ".csv"), row.names = FALSE)
 
 cat("\nCredible correlations (95% interval excluding zero):\n\n")
 cr <- cors[cors$credible, c("level", "term", "mean", "lwr", "upr")]
@@ -307,9 +329,10 @@ cor_matrix <- function(prefix) {
   }
   M
 }
-Mp <- cor_matrix("cor_phylo__"); Mr <- cor_matrix("rescor__")
+Mp <- cor_matrix("cor_phylo__")
+Mr <- if (RESCOR) cor_matrix("rescor__") else NULL
 
-pdf("../figures/Fig3_mrpmm.pdf", width = 11, height = 5.4)
+pdf(paste0("../figures/Fig3_mrpmm", SUF, ".pdf"), width = 11, height = 5.4)
 par(mfrow = c(1, 2), mar = c(7.5, 7.5, 3, 2))
 ramp <- colorRampPalette(c("#2B6B8F", "white", "#C4622D"))(101)
 show_mat <- function(M, main) {
@@ -323,6 +346,8 @@ show_mat <- function(M, main) {
   box(col = "grey50")
 }
 show_mat(Mp, "Phylogenetic correlation")
-show_mat(Mr, "Residual correlation")
+if (!is.null(Mr)) show_mat(Mr, "Residual correlation") else {
+  plot.new(); text(0.5, 0.5, "residual correlation\nnot estimated\n(set_rescor FALSE)",
+                   cex = 0.95, col = "grey35") }
 dev.off()
-cat("\nwritten ../figures/Fig3_mrpmm.pdf\n")
+cat("\nwritten", paste0("../figures/Fig3_mrpmm", SUF, ".pdf"), "\n")
