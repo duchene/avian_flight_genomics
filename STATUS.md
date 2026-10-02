@@ -1,7 +1,7 @@
 # STATUS
 
 Handoff note. Written for an assistant session resuming this work cold. Last updated
-1 October 2026.
+2 October 2026.
 
 ## Where things stand in one paragraph
 
@@ -9,8 +9,8 @@ The manuscript "Avian flight accelerates genome evolution" was rejected by Natur
 and Evolution and then by Nature Communications, six referee reports in total. The project
 is being rebuilt for Molecular Biology and Evolution around a single continuous flight
 predictor instead of the categorical scheme every referee attacked. Scripts 01 to 22 are
-written and run. The per-gene screen is executing now, about 20 hours. Script 23 is on its
-second specification after the first failed to converge. Only script 24, the figure
+written and run. The per-gene screen is executing now, about 20 hours. Script 23 is on its third
+specification; the first two did not converge and are documented below. Only script 24, the figure
 assembly, remains unwritten.
 
 ## Paths
@@ -41,7 +41,9 @@ assembly, remains unwritten.
 7. **MR-PMM replaces the Bayesian path analysis.** `brms`, not `MCMCglmm`.
 8. **Flight categories kept as published.** AVONET disagreed on only 8 of 83 taxa and our
    coding won 6 of those.
-9. **Residual correlation retained in script 23**, by decision, pending the new fits.
+9. **Residual correlation is OFF in script 23.** It was retained through two fits, both
+   of which failed to mix. The failing version is kept as evidence under `*_rescor` and
+   is reproducible with `MRPMM_RESCOR=TRUE`.
 
 ## Numbers already established. Reuse rather than recompute.
 
