@@ -68,9 +68,10 @@ the spreadsheet.
 | `16_rate_contrasts` | run, 6 s | Genome-wide dN, dS and omega contrasts on the index, with migration as a second orthogonal predictor |
 | `17_power_sim` | run, 28 s | Detection power of the 42-pair design, computed analytically from the non-central t |
 | `18_hyphaeon_prep` | run, 33 s | Phenotype table and gene manifest. 14,124 of 14,957 genes retained |
-| `19_hyphaeon_run.py` | **running** | The per-gene screen. Python, not R. See below |
-| `20_hyphaeon_collect` | tested | Parses the JSON, false-discovery control, base-composition check, non-neural comparator |
-| `21_gsea` | tested | GSEA on the continuous signed statistic, no threshold cut |
+| `19_hyphaeon_run.py` | run, 26 h | The per-gene screen. Python, not R. See below |
+| `20_hyphaeon_collect` | run | Parses the JSON, false-discovery control, base-composition check, non-neural comparator |
+| `20b_contrast_screen` | run | **Primary per-gene analysis.** Sister-pair rate contrasts against the flight-index contrast. No phylogenetic null, so nothing to misspecify |
+| `21_gsea` | run | GSEA on the continuous signed statistic, no threshold cut |
 | `22_age_latency` | run, 2 s | Pair age and trait interaction, minimal-change baseline, latency simulation |
 | `23_mrpmm` | **fitting** | Multi-response phylogenetic mixed model across the phylogeny |
 | `24_figures` | to write | Publication figures, one named function per figure |
@@ -95,8 +96,13 @@ Measured cost: **5.07 s per gene**, so about 20 hours per phenotype, and about 2
 for all three run as parallel processes. Permulations are free (0, 100 and 1000 take the
 same time), so the default is 1000. `--resume` makes the job restartable.
 
-HyphAeon's gene-level inference is **RERconverge-style**: `--permulations` is documented as
-the RERconverge null model, so a widespread signal can be read as relaxed selection.
+HyphAeon's gene-level inference is RERconverge-style, but **it is not used for inference
+here**. Its permulation null assumes pure Brownian motion and is exactly calibrated only
+when the trait is Brownian; our flight index sits at lambda 0.85, which makes the test
+conservative (whole-screen median p 0.786, zero genes at q < 0.05). Its gene summaries are
+also not null-centred, so they cannot rank genes for GSEA. `HYPHAEON.md` documents the
+calibration experiment. The primary per-gene analysis is `20b_contrast_screen`, which uses
+sister-pair contrasts and therefore needs no phylogenetic null at all.
 
 The RERconverge package itself is not used. It would supply no new null, only a different
 statistic, and that statistic is recovered for free in `20_hyphaeon_collect` by

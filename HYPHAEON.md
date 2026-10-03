@@ -131,3 +131,70 @@ hvenv/bin/hyphaeon phenotype \
 returned, in 1.5 s: taxa 75, codon sites 76, spectral energy 0.1075, normalised spectral
 ratio 0.1280, gene empirical p = 0.713 from 100 permulations, 0 sites significant at
 FDR 0.05.
+
+---
+
+# Why HyphAeon is not used for inference in this study
+
+Established by running it to completion on all 14,124 genes for three phenotypes, then
+testing its null directly. Both findings are reproducible from this repository.
+
+## 1. The permulation null assumes pure Brownian motion, and our traits are not
+
+The gene p-value is empirical from permulations simulated under Brownian motion. Feeding
+the same 60 genes three traits of known phylogenetic signal, with 1000 permulations each:
+
+| trait | lambda | median p | frac p < 0.05 | KS p |
+|---|---|---|---|---|
+| simulated Brownian | 0.994 | **0.500** | **0.050** | 0.60 |
+| real flight index | 0.850 | 0.789 | 0.000 | 3e-10 |
+| shuffled | 0.000 | 0.957 | 0.000 | 3e-19 |
+
+The test is **exactly calibrated when the trait is Brownian** and becomes steadily more
+conservative as the trait departs from Brownian. A permuted trait carrying more
+phylogenetic structure than the real one correlates more strongly by chance with rates
+that are themselves structured (ln dS has lambda 1.03), so the permuted statistics exceed
+the observed one and p is pushed toward 1.
+
+This is not a bug in HyphAeon. It is a mismatch between its null and our data, and it
+predicts the whole-screen result: median p of 0.786, 0.782 and 0.871 for the three
+phenotypes across 14,124 genes, and **zero genes at q < 0.05**.
+
+Recalibrating under a lambda-matched tree would fix the mismatch, but not the deeper
+problem: trait conservation almost certainly varies across the avian tree, so no single
+global lambda is right everywhere. Sister-pair contrasts avoid the question entirely,
+which is why `20b_contrast_screen` is the primary analysis.
+
+## 2. Its gene-level statistics cannot rank genes
+
+GSEA needs a ranking centred near zero under the null. None of the three gene summaries
+is, measured across the full screen:
+
+| statistic | loading | flightloss | migration |
+|---|---|---|---|
+| rho at highest-scoring site | 0.994 | 0.980 | 0.998 |
+| mean rho across sites | 0.255 | 0.980 | 0.998 |
+| median rho across sites | 0.189 | 0.060 | 0.920 |
+
+(fraction of genes with a positive value; 0.5 expected)
+
+Taking the rho at the most extreme site selects on magnitude and carries the sign with it.
+An early GSEA ranked on it returned 28 sets at q < 0.05 with **every NES positive**, the
+signature of an uncentred list rather than a finding. Script 21 now gates on this and
+excludes any ranking outside 0.25 to 0.75.
+
+## 3. It disagrees with a conventional statistic
+
+Rank concordance against relative evolutionary rates computed from our own PAML branch
+rates: 0.035, 0.054 and 0.009 for the three phenotypes. Essentially zero. The comparator
+found 9 genes at q < 0.05 for the flight index where HyphAeon found none.
+
+Given the preprint's only avian benchmark is rho = 0.403 on mitochondrial data, this is
+evidence that the mammal-trained model transfers poorly to avian nuclear coding sequence.
+
+## What HyphAeon is still good for here
+
+The full screen is retained in `output/hyphaeon_out` and `per_gene_statistics.csv`. It is
+reported as an exploratory layer and as a methods observation. The calibration result
+above is worth communicating to the authors: the fix on their side is to simulate
+permulations under a lambda-transformed tree rather than pure Brownian.

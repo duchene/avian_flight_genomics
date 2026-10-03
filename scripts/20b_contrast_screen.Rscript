@@ -1,0 +1,203 @@
+# 20b_contrast_screen.Rscript
+#
+# Per-gene screen on sister-pair contrasts. This is the PRIMARY per-gene analysis.
+#
+# WHY THIS RATHER THAN THE PHYLOGENETIC SCREEN
+#
+# HyphAeon's permulation null simulates traits under pure Brownian motion. Measured on 60
+# genes with traits of known phylogenetic signal:
+#
+#     trait                lambda   median p   frac p<0.05   KS p
+#     simulated Brownian    0.994      0.500        0.050    0.60
+#     real flight index     0.850      0.789        0.000    3e-10
+#     shuffled              0.000      0.957        0.000    3e-19
+#
+# The test is exactly calibrated when the trait is Brownian and becomes steadily more
+# conservative as it departs from Brownian. The real flight index sits at lambda 0.85, so
+# the whole-genome screen returned a median p of 0.786 and zero genes at q < 0.05.
+#
+# Worse, a single lambda is itself an assumption. Trait conservation almost certainly
+# varies across the tree, so no global phylogenetic null is right everywhere.
+#
+# Sister-pair contrasts avoid the problem rather than patching it. Each pair is an
+# independent contrast by construction, so no phylogenetic model, no lambda and no
+# permulation calibration enter. The test is an ordinary correlation across 42 independent
+# observations, exactly the test whose power script 17 computed: rho = 0.41 for 80% power
+# on a single gene, 0.55 inside a BH-controlled screen.
+#
+# THE BINARY PHENOTYPES ARE RESOLUTION-LIMITED, and this is a design finding rather than
+# a nuisance. A Wilcoxon test on 42 pairs has a discrete null, so its p-value has a floor.
+# Measured on the dS screen: the continuous flight index yields 10,698 distinct p-values
+# among 10,698 genes with a minimum of 3.3e-07, whereas the binary migration contrast
+# yields only 2,982 distinct values with a minimum of 6.2e-04. Benjamini-Hochberg on about
+# 10,700 genes needs roughly 4.7e-06 for the top gene, so the binary migration screen
+# CANNOT return a discovery whatever the biology. Flight loss can barely clear it.
+#
+# The remedy is resolution, not a different test: use a graded phenotype. AVONET supplies
+# an ordinal migration score (1 sedentary, 2 partial, 3 full) that would restore it.
+#
+# TESTS. The continuous flight index uses a Pearson correlation with its exact t test,
+# which is already well calibrated here (median p 0.496). The two binary phenotypes use a
+# Wilcoxon rank-sum test, which IS the exact permutation test for a binary contrast, and
+# reports a rank-biserial correlation on the same scale as r. The t approximation is poor
+# for them because only 7 of 42 pairs are flight-loss.
+#
+# DIRECTION. moldiff in dnds_sisdifs_vol.Rdata is sp1/sp2, and sp1 is NOT always the
+# lesser-flight sister: in 7 of 42 pairs the AviList reordering put them the other way.
+# Every contrast is oriented against the trait table, never by position.
+#
+# Requires: none beyond base R
+# In:  ../output/traits_contrasts.csv, ../output/traits_per_taxon.csv,
+#      ../data/dnds_sisdifs_vol.Rdata
+# Out: ../output/contrast_screen.csv, ../figures/FigS_contrast_screen.pdf
+
+MIN_PAIRS <- 20      # genes with fewer usable pairs carry too little information
+QCUT      <- 0.05
+
+contr <- read.csv("../output/traits_contrasts.csv", stringsAsFactors = FALSE)
+taxa  <- read.csv("../output/traits_per_taxon.csv", stringsAsFactors = FALSE)
+load("../data/dnds_sisdifs_vol.Rdata")
+
+dir.create("../output", showWarnings = FALSE)
+dir.create("../figures", showWarnings = FALSE)
+
+lesser <- taxa$code[taxa$sister == "lesser"]
+contr$comparison <- sub("-[A-Z]{2}$", "", contr$pair_id)
+
+# The three phenotype contrasts, all at pair level.
+PH <- list(loading    = setNames(contr$d_loading,        contr$comparison),
+           flightloss = setNames(contr$flight_loss_pair, contr$comparison),
+           migration  = setNames(contr$migration_pair,   contr$comparison))
+
+
+# ---- 1. Per-gene correlation of rate contrast with trait contrast ----
+
+screen_rate <- function(d, rate_label) {
+  d <- d[is.finite(d$moldiff) & d$moldiff > 0, ]
+  # orient: positive means the MORE flight-capable sister evolves faster
+  d$y <- ifelse(d$sp1 %in% lesser, -1, 1) * log(d$moldiff)
+  sp <- split(d[, c("comparison", "y")], d$locus)
+  cat("  ", rate_label, ": ", length(sp), " genes\n", sep = "")
+
+  do.call(rbind, lapply(names(PH), function(ph) {
+    x_all <- PH[[ph]]
+    out <- do.call(rbind, lapply(names(sp), function(g) {
+      v <- sp[[g]]
+      x <- x_all[v$comparison]
+      ok <- is.finite(x) & is.finite(v$y)
+      n <- sum(ok)
+      if (n < MIN_PAIRS) return(NULL)
+      xx <- x[ok]; yy <- v$y[ok]
+      if (sd(xx) == 0 || sd(yy) == 0) return(NULL)
+      binary <- all(xx %in% c(0, 1))
+      if (binary) {
+        # For a binary contrast the permutation null of the rank correlation is exactly
+        # the Wilcoxon rank-sum distribution, so the exact test is available and no
+        # simulation is needed. The t approximation used for a continuous predictor is
+        # poor here because only 7 of 42 pairs are flight-loss, which is what made the
+        # flight-loss screen conservative (median p 0.54, frac<0.05 only 0.037).
+        g1 <- yy[xx == 1]; g0 <- yy[xx == 0]
+        if (length(g1) < 3 || length(g0) < 3) return(NULL)
+        w <- suppressWarnings(wilcox.test(g1, g0, exact = NULL))
+        # signed effect on the same scale as r, from the rank-biserial correlation
+        r <- 2 * (unname(w$statistic) / (length(g1) * length(g0))) - 1
+        pv <- w$p.value
+      } else {
+        r <- cor(xx, yy)
+        tt <- r * sqrt((n - 2) / (1 - r^2))   # exact t test for a correlation
+        pv <- 2 * pt(-abs(tt), n - 2)
+      }
+      data.frame(gene = g, rate = rate_label, phenotype = ph, n_pairs = n,
+                 r = r, p = pv, row.names = NULL)
+    }))
+    out
+  }))
+}
+
+cat("screening\n")
+res <- rbind(screen_rate(sisdifggds,   "dS"),
+             screen_rate(sisdifggdn,   "dN"),
+             screen_rate(sisdifggdnds, "omega"))
+
+# false-discovery control within each rate-by-phenotype screen
+res$q <- NA_real_
+for (k in unique(paste(res$rate, res$phenotype))) {
+  i <- paste(res$rate, res$phenotype) == k
+  res$q[i] <- p.adjust(res$p[i], method = "BH")
+}
+write.csv(res, "../output/contrast_screen.csv", row.names = FALSE)
+
+
+# ---- 2. Calibration, which is the point of doing it this way ----
+
+cat("\nCalibration. Under the null these p-values are uniform by construction,\n")
+cat("with no phylogenetic model to misspecify.\n\n")
+cat(sprintf("  %-6s %-11s %7s %8s %9s %10s %7s\n",
+            "rate", "phenotype", "genes", "median p", "frac<0.05", "KS p", "q<0.05"))
+for (rt in unique(res$rate)) for (ph in unique(res$phenotype)) {
+  d <- res[res$rate == rt & res$phenotype == ph, ]
+  if (!nrow(d)) next
+  cat(sprintf("  %-6s %-11s %7d %8.3f %9.3f %10.2e %7d\n", rt, ph, nrow(d),
+              median(d$p), mean(d$p < 0.05),
+              suppressWarnings(ks.test(d$p, "punif")$p.value), sum(d$q < QCUT)))
+}
+
+# A discrete test has a floor on the p-value it can produce. If that floor exceeds the
+# Benjamini-Hochberg threshold for the most extreme gene, roughly alpha/n_genes, the
+# screen CANNOT make a discovery however strong the biology. This has to be checked, not
+# assumed, and it is why a binary phenotype is a costly simplification here.
+cat("\nResolution floor. A discrete test cannot report a p below its own minimum.\n\n")
+cat(sprintf("  %-6s %-11s %8s %12s %12s %s\n",
+            "rate", "phenotype", "distinct", "min p", "BH needs", "can discover?"))
+for (rt in unique(res$rate)) for (ph in unique(res$phenotype)) {
+  d <- res[res$rate == rt & res$phenotype == ph, ]
+  if (!nrow(d)) next
+  need <- QCUT / nrow(d)
+  cat(sprintf("  %-6s %-11s %8d %12.2e %12.2e %s\n", rt, ph,
+              length(unique(signif(d$p, 10))), min(d$p), need,
+              if (min(d$p) <= need) "yes" else "NO, floor is above the threshold"))
+}
+
+cat("\nSigned statistic centring (frac r>0 should be ~0.5 under the null):\n\n")
+for (rt in unique(res$rate)) for (ph in unique(res$phenotype)) {
+  d <- res[res$rate == rt & res$phenotype == ph, ]
+  if (!nrow(d)) next
+  cat(sprintf("  %-6s %-11s median r %7.4f   frac>0 %.3f\n",
+              rt, ph, median(d$r), mean(d$r > 0)))
+}
+
+sig <- res[res$q < QCUT, ]
+cat("\n", strrep("=", 70), "\n", sep = "")
+if (nrow(sig)) {
+  cat("Genes at q <", QCUT, ":", nrow(sig), "\n\n")
+  print(table(sig$rate, sig$phenotype))
+} else {
+  cat("No gene passes q < ", QCUT, " in any rate-by-phenotype screen.\n", sep = "")
+  cat("Read against script 17: this design needs rho = 0.55 for 80% power in a\n")
+  cat("BH-controlled screen of this size, so a null here is expected rather than\n")
+  cat("informative about biology.\n")
+}
+cat(strrep("=", 70), "\n")
+
+
+# ---- 3. Figure ----
+
+pdf("../figures/FigS_contrast_screen.pdf", width = 10, height = 6.5)
+par(mfrow = c(3, 3), mar = c(4, 4.2, 2.6, 1), tcl = -0.25, mgp = c(2.4, 0.5, 0),
+    cex.axis = 0.8)
+for (rt in c("dS", "dN", "omega")) for (ph in c("loading", "flightloss", "migration")) {
+  d <- res[res$rate == rt & res$phenotype == ph, ]
+  if (!nrow(d)) { plot.new(); next }
+  hist(d$p, breaks = 30, col = "#2B7A9B", border = "white",
+       main = paste(rt, ph), font.main = 1, cex.main = 0.95, xlab = "", ylab = "")
+  abline(h = nrow(d) / 30, col = "#D1793B", lwd = 2, lty = 2)
+  mtext("p", side = 1, line = 2.2, cex = 0.65)
+  mtext("genes", side = 2, line = 2.4, cex = 0.65)
+  legend("topright", bty = "n", cex = 0.65,
+         legend = sprintf("median %.2f", median(d$p)))
+  box(bty = "l", col = "grey45")
+}
+dev.off()
+cat("\nwritten ../figures/FigS_contrast_screen.pdf\n")
+cat("The dashed line is the uniform expectation. Departure here is signal,\n")
+cat("not miscalibration, because the null needs no phylogenetic model.\n")

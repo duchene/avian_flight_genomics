@@ -1,7 +1,7 @@
 # STATUS
 
 Handoff note. Written for an assistant session resuming this work cold. Last updated
-2 October 2026.
+3 October 2026.
 
 ## Where things stand in one paragraph
 
@@ -106,7 +106,8 @@ the ratites. Real biology, but a Gaussian response is an approximation there. Ma
 
 ## Scripts
 
-Done and tested: `01` to `22`. To write: `24_figures`.
+Done and tested: `01` to `22`, including the new `20b_contrast_screen`, which is now
+the primary per-gene analysis. To write: `24_figures`.
 
 Running now: `19_hyphaeon_run.py` for all three phenotypes in parallel, 14,124 genes each,
 1000 permulations, `--resume`. At about 69% after roughly 19 hours; the rate settled to
@@ -160,6 +161,60 @@ still fails, cut the response set to three or four.
 | 23 MR-PMM | unresolved, over an hour on the failing specification |
 
 Permulations are free: the same gene at 0, 100 and 1000 took 12.7, 11.3 and 11.5 s.
+
+
+## Per-gene screening: what is appropriate, and why the alternatives are not
+
+Settled empirically. Full reasoning in `HYPHAEON.md`; the short version follows.
+
+**The primary screen is `20b_contrast_screen`**, correlating each gene's sister-pair rate
+contrast against the contrast in the continuous flight index across 42 pairs. Sister pairs
+are independent contrasts by construction, so no phylogenetic model, no lambda and no
+permulation null enter, and there is nothing to misspecify. Median p is 0.496 to 0.497,
+and it finds 6 genes on dS and 1 on omega at q < 0.05. Script 17 computed power for
+exactly this test.
+
+**Only two of nine rate-by-phenotype screens are usable**, and both are the continuous
+flight index. The rest fail a *resolution floor*: a discrete test cannot report a p below
+its own minimum, and if that floor sits above the Benjamini-Hochberg threshold for the top
+gene the screen cannot make a discovery whatever the biology.
+
+| screen | distinct p | min p | BH needs | usable |
+|---|---|---|---|---|
+| dS x loading | 10,698 | 3.3e-07 | 4.7e-06 | yes |
+| omega x loading | 6,908 | 3.3e-06 | 7.2e-06 | yes |
+| dS x flightloss | 2,673 | 8.4e-06 | 4.8e-06 | no |
+| dS x migration | 2,982 | 6.2e-04 | 4.7e-06 | no, 130-fold short |
+| dN x loading | 6,719 | 6.9e-05 | 7.4e-06 | no |
+| four others | | | | no |
+
+The binary phenotypes are resolution-limited because 42 pairs split 7/35 or 21/21 give
+only a few thousand distinguishable outcomes. This is a property of the design, not of the
+test: switching from a t approximation to an exact Wilcoxon made it slightly worse, not
+better. dN fails despite being continuous because it has usable data for only 6,719 genes.
+The remedy would be a graded phenotype, not a different test, and we have chosen not to
+pursue it.
+
+**HyphAeon is not used for inference.** Three reasons, each measured:
+
+1. Its permulation null assumes pure Brownian motion. It is exactly calibrated at
+   lambda 0.994 (median p 0.500, 5.0% below 0.05, KS p 0.60) and becomes steadily more
+   conservative as the trait departs from Brownian: 0.789 at lambda 0.85, 0.957 at
+   lambda 0. Our flight index sits at 0.85, which predicts the whole-screen median of
+   0.786 and the zero discoveries. A lambda-matched null would patch this, but trait
+   conservation varies across the tree so no single lambda is right anywhere.
+2. None of its gene summaries is null-centred (fraction positive from 0.06 to 0.998), so
+   none can rank genes for GSEA. An early run on one returned 28 sets at q < 0.05 with
+   every NES positive, which is an uncentred list rather than a finding.
+3. Rank concordance with relative rates from our own PAML branch lengths is 0.009 to
+   0.054, essentially zero, and the comparator found 9 genes where HyphAeon found none.
+
+The full HyphAeon screen is retained in `output/hyphaeon_out` and reported as an
+exploratory layer plus a methods observation worth sending to the authors.
+
+**GSEA** ranks on the contrast statistic and reports nothing at q < 0.05. The comparator
+ranking yields 6 sets, three of which (GPCR activity, GPCR signalling, olfactory receptor
+activity) are a single overlapping, paralogy-prone family and should be treated with care.
 
 ## Traps
 

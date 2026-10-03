@@ -6,10 +6,19 @@
 # GENE-LEVEL STATISTICS ARE IN THE JSON ONLY. The CSV that HyphAeon writes is site-level,
 # so this parses JSON.
 #
-# A SIGNED gene statistic has to be constructed. gene_p_value_perm is a p-value and
-# max_assoc is a magnitude, so neither can rank genes by direction. The signed statistic
-# used here is the association_rho of the highest-scoring site in each gene, which
-# preserves the direction of the trait-rate relationship. Script 21 ranks on it.
+# A SIGNED gene statistic has to be constructed, since gene_p_value_perm is a p-value and
+# max_assoc is a magnitude. Three are recorded: top_rho (rho at the highest-scoring site),
+# mean_rho and med_rho (across all sites).
+#
+# NONE OF THEM IS NULL-CENTRED, and that matters. Measured on the real screen: top_rho is
+# positive for 99.2 percent of genes, because selecting the most extreme site selects on
+# magnitude and carries the sign with it. mean_rho and med_rho are shifted the other way,
+# positive for only 24 and 18 percent. GSEA ranked on any of them detects the global shift
+# rather than set-specific enrichment: an earlier run on top_rho returned 28 sets at
+# q < 0.05 with every single NES positive, which is the signature of an uncentred list.
+#
+# Script 21 therefore ranks on the comparator statistic below, which is centred by
+# construction, and reports these only as a sensitivity.
 #
 # CHECK 1, base composition. aitchison_variance_results.csv is a per-gene measure of
 # base-composition heterogeneity across lineages. Correlating it against the per-gene
@@ -44,12 +53,15 @@ parse_one <- function(path) {
   d <- tryCatch(fromJSON(path, simplifyVector = TRUE), error = function(e) NULL)
   if (is.null(d)) return(NULL)
   s <- d$sites
-  top_rho <- NA_real_; top_lrt <- NA_real_; n_sites <- 0L
+  top_rho <- NA_real_; top_lrt <- NA_real_; mean_rho <- NA_real_
+  med_rho <- NA_real_; n_sites <- 0L
   if (!is.null(s) && length(s) && is.data.frame(s) && nrow(s)) {
     n_sites <- nrow(s)
     i <- which.max(abs(s$score))
-    top_rho <- s$association_rho[i]
-    top_lrt <- s$hyphaeon_lrt[i]
+    top_rho  <- s$association_rho[i]   # NOT null-centred, see the warning below
+    top_lrt  <- s$hyphaeon_lrt[i]
+    mean_rho <- mean(s$association_rho, na.rm = TRUE)
+    med_rho  <- median(s$association_rho, na.rm = TRUE)
   }
   data.frame(
     gene = if (!is.null(d$gene)) d$gene else sub("[.]json$", "", basename(path)),
@@ -62,8 +74,10 @@ parse_one <- function(path) {
     dual_track_composite = d$dual_track_composite %||% NA_real_,
     n_sig_sites = d$significant_sites_count %||% NA_integer_,
     n_sites = n_sites,
-    top_rho = top_rho,      # SIGNED gene statistic, used for GSEA ranking
+    top_rho = top_rho,
     top_lrt = top_lrt,
+    mean_rho = mean_rho,
+    med_rho = med_rho,
     stringsAsFactors = FALSE)
 }
 `%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
@@ -96,6 +110,25 @@ for (ph in unique(res$phenotype)) {
   cat(sprintf("  %-11s n=%-6d median p = %.3f  (uniform expects 0.50)  KS p = %.3g\n",
               ph, length(p), median(p), suppressWarnings(ks.test(p, "punif")$p.value)))
 }
+
+
+# ---- 1b. Centring check on the candidate ranking statistics ----
+#
+# A statistic fit to rank genes for GSEA must be centred near zero under the null.
+# Anything far from a 0.5 positive fraction will make GSEA report a global shift.
+
+cen <- do.call(rbind, lapply(unique(res$phenotype), function(ph) {
+  d <- res[res$phenotype == ph, ]
+  do.call(rbind, lapply(c("top_rho", "mean_rho", "med_rho"), function(v) {
+    x <- d[[v]]
+    data.frame(phenotype = ph, statistic = v, median = median(x, na.rm = TRUE),
+               frac_positive = mean(x > 0, na.rm = TRUE), row.names = NULL)
+  }))
+}))
+cen$usable <- abs(cen$frac_positive - 0.5) < 0.1
+cat("\nCentring of the candidate ranking statistics (frac_positive should be ~0.5):\n\n")
+print(format(cen, digits = 3), row.names = FALSE)
+if (!any(cen$usable)) cat("\n  None is usable for GSEA. Script 21 ranks on the comparator instead.\n")
 
 
 # ---- 2. Base composition check ----
@@ -182,10 +215,13 @@ if (!is.null(cmp)) {
     d <- merge(res[res$phenotype == ph, c("key", "top_rho", "p_perm")],
                cmp[cmp$phenotype == ph, c("key", "rer_rho", "rer_p")], by = "key")
     if (nrow(d) < 10) return(NULL)
-    data.frame(phenotype = ph, n = nrow(d),
+    # complete.obs is required: a handful of genes yield no usable site and so have
+    # NA in top_rho, which would otherwise propagate and return NA for the whole column
+    data.frame(phenotype = ph, n = sum(complete.cases(d[, c("top_rho", "rer_rho")])),
                rho_statistic = suppressWarnings(cor(d$top_rho, d$rer_rho,
-                                                    method = "spearman")),
-               rho_pvalue = suppressWarnings(cor(d$p_perm, d$rer_p, method = "spearman")),
+                                 method = "spearman", use = "complete.obs")),
+               rho_pvalue = suppressWarnings(cor(d$p_perm, d$rer_p,
+                                 method = "spearman", use = "complete.obs")),
                row.names = NULL)
   }))
   if (!is.null(conc)) {
@@ -228,4 +264,4 @@ for (ph in unique(res$phenotype)) {
 }
 dev.off()
 cat("\nwritten ../figures/FigS_hyphaeon_qc.pdf\n")
-cat("next: scripts/21_gsea.Rscript, ranking on top_rho\n")
+cat("next: scripts/21_gsea.Rscript, ranking on the comparator (see centring table above)\n")

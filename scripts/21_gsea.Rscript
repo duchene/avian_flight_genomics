@@ -12,10 +12,25 @@
 # either end. There is no cut to tune, and the background is the full ranked list rather
 # than a set chosen by hand.
 #
-# RANKING STATISTIC. The signed association_rho of the highest-scoring site in each gene,
-# computed in script 20. HyphAeon's gene-level p-value and max_assoc are both unsigned, so
-# neither can order genes by direction, and GSEA needs a signed ranking. A positive value
-# means the trait-rate association runs in the direction of the phenotype.
+# RANKING STATISTIC. The relative-evolutionary-rate correlation from script 20's
+# comparator, NOT a HyphAeon statistic.
+#
+# This is a correction. GSEA requires a ranking that is centred near zero under the null,
+# or it reports the global shift of the list instead of set-specific enrichment. None of
+# HyphAeon's gene summaries meets that. Measured on the full screen: rho at the
+# highest-scoring site is positive for 99.2 percent of genes, and the mean and median
+# across sites are positive for only 24 and 18 percent. An earlier run ranked on the first
+# of these returned 28 sets at q < 0.05 with EVERY NES positive, which is the signature of
+# an uncentred list rather than a finding.
+#
+# The comparator is centred by construction, because it is built by double-centring the
+# log per-locus per-taxon rates. Measured: positive fraction 0.488, 0.466 and 0.533 across
+# the three phenotypes, with p-values of median 0.446 to 0.498 and uniform by
+# Kolmogorov-Smirnov for two of the three. It is also the statistic that actually found
+# something, 9 genes at q < 0.05 for the flight index where HyphAeon found none.
+#
+# The HyphAeon summaries are still run, as a sensitivity, and the centring of whatever is
+# used is checked before GSEA sees it.
 #
 # Reported at q < 0.05. A null result is reported as a null result.
 #
@@ -65,27 +80,53 @@ cat("sets within size bounds (", MIN_SET, "to", MAX_SET, "):",
 
 res <- read.csv("../output/per_gene_statistics.csv", stringsAsFactors = FALSE)
 res$key <- sub("[.]c123.*$", "", res$gene)
+cmp <- read.csv("../output/rer_comparator.csv", stringsAsFactors = FALSE)
+csc <- read.csv("../output/contrast_screen.csv", stringsAsFactors = FALSE)
+csc$key <- sub("[.]c123.*$", "", csc$gene)
 
-rank_of <- function(ph) {
-  d <- res[res$phenotype == ph & is.finite(res$top_rho), ]
+# PRIMARY is the sister-pair contrast screen on the continuous flight index, restricted
+# to the two rate-by-phenotype screens that clear their resolution floor (dS and omega
+# against the loading index). The comparator runs alongside it, and the HyphAeon
+# summaries run only as a sensitivity.
+contrast_src <- function(rate) {
+  d <- csc[csc$rate == rate & csc$phenotype == "loading", c("key", "r")]
+  names(d)[2] <- "stat"; d$phenotype <- "loading"; d
+}
+STATS <- list(
+  contrast_dS    = list(src = "csc_dS",    col = "stat"),
+  contrast_omega = list(src = "csc_omega", col = "stat"),
+  comparator     = list(src = "cmp",       col = "rer_rho"),
+  hyphaeon_mean  = list(src = "res",       col = "mean_rho"),
+  hyphaeon_top   = list(src = "res",       col = "top_rho"))
+
+rank_of <- function(ph, which_stat) {
+  cfg <- STATS[[which_stat]]
+  d <- switch(cfg$src,
+    cmp      = cmp[cmp$phenotype == ph, ],
+    res      = res[res$phenotype == ph, ],
+    csc_dS   = if (ph == "loading") contrast_src("dS")    else NULL,
+    csc_omega= if (ph == "loading") contrast_src("omega") else NULL)
+  if (is.null(d)) return(NULL)
+  d <- d[is.finite(d[[cfg$col]]), ]
   if (!nrow(d)) return(NULL)
   d <- d[!duplicated(d$key), ]
-  v <- setNames(d$top_rho, d$key)
-  sort(v, decreasing = TRUE)
+  sort(setNames(d[[cfg$col]], d$key), decreasing = TRUE)
 }
 
 
 # ---- 3. GSEA ----
 
-run_one <- function(ph) {
-  gl <- rank_of(ph)
+run_one <- function(ph, which_stat) {
+  gl <- rank_of(ph, which_stat)
   if (is.null(gl) || length(gl) < 100) {
-    cat("skipping", ph, ": only", length(gl), "genes with a statistic\n")
+    cat("skipping", ph, "/", which_stat, ": too few genes\n")
     return(NULL)
   }
+  fpos <- mean(gl > 0)
   annotated <- sum(names(gl) %in% t2g$gene)
-  cat(sprintf("%-11s %d genes ranked, %d annotated, rho range %.3f to %.3f\n",
-              ph, length(gl), annotated, min(gl), max(gl)))
+  cat(sprintf("%-11s %-14s %5d genes, %5d annotated, frac>0 %.3f%s\n",
+              ph, which_stat, length(gl), annotated, fpos,
+              if (abs(fpos - 0.5) > 0.25) "   <-- UNCENTRED, results not interpretable" else ""))
   e <- tryCatch(
     GSEA(gl, TERM2GENE = t2g, TERM2NAME = t2n, minGSSize = MIN_SET,
          maxGSSize = MAX_SET, pvalueCutoff = 1, eps = 0, seed = TRUE, verbose = FALSE),
@@ -93,10 +134,14 @@ run_one <- function(ph) {
   if (is.null(e) || !nrow(as.data.frame(e))) return(NULL)
   df <- as.data.frame(e)
   df$phenotype <- ph
+  df$statistic <- which_stat
+  df$frac_positive <- fpos
   df
 }
 
-all_res <- do.call(rbind, Filter(Negate(is.null), lapply(unique(res$phenotype), run_one)))
+grid <- expand.grid(ph = unique(res$phenotype), st = names(STATS), stringsAsFactors = FALSE)
+all_res <- do.call(rbind, Filter(Negate(is.null),
+  mapply(run_one, grid$ph, grid$st, SIMPLIFY = FALSE)))
 if (is.null(all_res)) {
   cat("\nNo GSEA results produced. Run 19_hyphaeon_run.py over the full gene set first.\n")
   quit(save = "no")
@@ -104,12 +149,21 @@ if (is.null(all_res)) {
 write.csv(all_res, "../output/gsea_results.csv", row.names = FALSE)
 
 cat("\n", strrep("=", 78), "\n", sep = "")
-sig <- all_res[all_res$p.adjust < QCUT, ]
+# Only the centred statistic is reportable. The rest are kept in the CSV for the record.
+# The gate was first set at 0.1, calibrated against HyphAeon's artefact where 99.4% of
+# genes scored positive. A genuine genome-wide shift is different in kind: the dS contrast
+# statistic sits at 0.674 because there really is a weak genome-wide dS trend, matching
+# script 16. GSEA permutes gene labels, so it tolerates a modest shift but not a list that
+# is almost entirely one-signed. 0.25 separates the two cases.
+all_res$interpretable <- abs(all_res$frac_positive - 0.5) < 0.25
+sig <- all_res[all_res$p.adjust < QCUT & all_res$interpretable, ]
 if (nrow(sig)) {
   cat("Enriched sets at q <", QCUT, ":\n\n")
   print(format(sig[order(sig$p.adjust),
-                   c("phenotype", "ID", "Description", "setSize", "NES",
-                     "pvalue", "p.adjust")], digits = 3), row.names = FALSE)
+                   c("phenotype", "statistic", "Description", "setSize", "NES",
+                     "p.adjust")], digits = 3), row.names = FALSE)
+  cat("\nNES sign split (a healthy run has both):\n")
+  print(table(sig$phenotype, ifelse(sig$NES > 0, "positive", "negative")))
 } else {
   cat("No gene set is enriched at q < ", QCUT, " for any phenotype.\n\n", sep = "")
   cat("This is the result, not a failure of the analysis. The previous submission\n")
@@ -127,6 +181,8 @@ cat(strrep("=", 78), "\n")
 # ---- 4. Figure ----
 
 pdf("../figures/Fig4_gsea.pdf", width = 10, height = 6)
+all_res <- all_res[all_res$interpretable, ]
+if (!nrow(all_res)) { dev.off(); cat("\nno interpretable ranking available\n"); quit(save="no") }
 phs <- unique(all_res$phenotype)
 par(mfrow = c(1, max(1, length(phs))), mar = c(4.2, 12, 2.8, 1), tcl = -0.25,
     mgp = c(2.5, 0.5, 0), cex.axis = 0.8)
