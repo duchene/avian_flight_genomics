@@ -83,7 +83,10 @@ screen_rate <- function(d, rate_label) {
     x_all <- PH[[ph]]
     out <- do.call(rbind, lapply(names(sp), function(g) {
       v <- sp[[g]]
-      x <- x_all[v$comparison]
+      # as.character is essential: comparison is a FACTOR, and indexing a named vector
+      # with a factor silently uses its integer level codes instead of its labels, which
+      # pairs every gene's rate contrast with the WRONG pair's trait value.
+      x <- x_all[as.character(v$comparison)]
       ok <- is.finite(x) & is.finite(v$y)
       n <- sum(ok)
       if (n < MIN_PAIRS) return(NULL)

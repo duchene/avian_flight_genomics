@@ -73,7 +73,8 @@ rates <- Reduce(function(a, b) merge(a, b, by = "comparison"),
                      summarise_rate(sisdifggdn,   "dn"),
                      summarise_rate(sisdifggdnds, "w")))
 
-rates$pair_id <- unname(pair_of[rates$comparison])
+# as.character guards against factor-code indexing, see 20b_contrast_screen
+rates$pair_id <- unname(pair_of[as.character(rates$comparison)])
 dat <- merge(contr, rates, by = "pair_id")
 stopifnot(nrow(dat) == 42)
 

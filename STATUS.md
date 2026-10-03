@@ -75,9 +75,30 @@ all 84 on the index, above only *Aptenodytes forsteri*.
 
 ## Results so far
 
-**16, rate contrasts.** The flight index explains nothing surviving BH correction (all
-p_adj = 0.123; raw p for dS 0.049 to 0.055). Migration does: omega is lower in the
-migratory sister, p_adj = 0.019 on both response types.
+**16, rate contrasts** (corrected after the factor-indexing bug; the earlier numbers in
+this file were wrong). The flight index explains nothing surviving BH correction, minimum
+p_adj 0.168. Migration does, and the corrected result **reproduces the original paper's
+published finding**: dN and dS are elevated in the migratory sister (p_adj 0.0078 and
+0.015, positive estimates) while omega is unaffected (0.24, 0.18). The buggy version had
+claimed the opposite, a significant omega effect and null dN and dS.
+
+**20b, contrast screen** (also corrected). One gene passes q < 0.05, GALGAL_R08885 on
+dN against the flight index (n = 36, r = -0.695, q = 0.017). The seven genes reported
+before the fix were artefacts.
+
+The informative result is genome-wide rather than per gene. Against a 5% expectation:
+
+| rate | phenotype | genes below p = 0.05 | median p |
+|---|---|---|---|
+| dS | migration | **11.7%** | 0.377 |
+| dN | migration | **9.5%** | 0.412 |
+| dS, dN, omega | loading | 4.2 to 4.6% | 0.52 to 0.54 |
+| dS, dN, omega | flightloss | 2.7 to 3.1% | 0.55 to 0.57 |
+
+So migration produces a strong, genome-wide excess of small p-values on dS and dN, matching
+script 16 and the original paper, but no single gene survives correction because the binary
+test's resolution floor (minimum p 1.3e-05 against a 4.7e-06 requirement) blocks it. The
+flight index sits at the nominal rate, that is, no signal.
 
 **17, power.** 80% power needs rho = 0.41 for a single gene, **0.55 inside a BH-controlled
 screen of 14,785**. A null in the screen must be read against that bound.
@@ -217,6 +238,17 @@ ranking yields 6 sets, three of which (GPCR activity, GPCR signalling, olfactory
 activity) are a single overlapping, paralogy-prone family and should be treated with care.
 
 ## Traps
+
+- **`comparison` in `dnds_sisdifs_vol.Rdata` is a FACTOR, and indexing a named vector with
+  a factor uses its integer level codes, not its labels.** This silently paired every
+  gene's rate contrast with the wrong pair's trait value in both `16_rate_contrasts` and
+  `20b_contrast_screen`, with no error and plausible output. It inverted the script 16
+  conclusions and manufactured seven spurious genes in the screen. Always
+  `as.character()` before indexing. Both scripts are fixed and carry a comment saying why
+  the conversion is load-bearing.
+  This is the second silent mis-pairing bug here, after the `sp1` orientation trap. Both
+  came from joining pair-level data by position or implicit conversion rather than by an
+  explicit key. Any new script touching pair-level data should assert the join.
 
 - **`sp1` in `dnds_sisdifs_vol.Rdata` is NOT always the lesser-flight sister.** In 7 of 42
   pairs it is the greater-flight one: ANTCAR-CHOACU, AQUCHR-HALALB, STROCC-TYTALB,
