@@ -73,8 +73,10 @@ the spreadsheet.
 | `20b_contrast_screen` | run | **Primary per-gene analysis.** Sister-pair rate contrasts against the flight-index contrast. No phylogenetic null, so nothing to misspecify |
 | `21_gsea` | run | GSEA on the continuous signed statistic, no threshold cut |
 | `22_age_latency` | run, 2 s | Pair age and trait interaction, minimal-change baseline, latency simulation |
-| `23_mrpmm` | **fitting** | Multi-response phylogenetic mixed model across the phylogeny |
-| `24_figures` | to write | Publication figures, one named function per figure |
+| `23_mrpmm` | run, 9.2 h per fit | Multi-response phylogenetic mixed model. Four specifications, see below |
+| `24_fig_genomewide` | run | Figure 6, the genome-wide excess against a permutation null |
+| `25_mrpmm_compare` | run | Compares the four MR-PMM fits and labels each correlation |
+| `26_pelican_prep` | run, 3 min | Inputs for the per-site PELICAN screen. See `hpc/` |
 
 ### Not carried forward
 
@@ -112,7 +114,34 @@ residual RERconverge models. 13,625 genes in minutes, from our own PAML rates.
 ## The multi-response model
 
 `23_mrpmm` fits seven per-taxon responses with a phylogenetic random effect correlated
-across responses and residual correlation retained.
+across responses. **Residual correlation is off.** It was retained at first, did not
+converge, and is kept under the `_rescor` suffix as evidence.
+
+Restoring it was reconsidered once outlier trimming had fixed the skew, and ruled out on
+measurement. Trimming raises Pagel's lambda for ln dS from 1.025 to 1.079, for the flight
+index from 0.960 to 1.026 and for GC from 0.912 to 1.004. The outliers were the main
+departure from the tree, so removing them leaves data that look more Brownian and pushes
+all three further onto the boundary where residual variance wants to be zero.
+
+### The four specifications
+
+| fit | flight response | taxa | reported correlations |
+|---|---|---|---|
+| `_norescor` | loading index | 83 | Rhat 1.047, ESS 79 |
+| `_norescor_rz4` | loading index | 80 | **Rhat 1.011, ESS 543** |
+| `_norescor_mig` | binary migratory | 83 | Rhat 1.012, ESS 335 |
+| `_norescor_mig_rz4` | binary migratory | 80 | Rhat 1.018, ESS 209 |
+
+Every parameter above Rhat 1.05 in every fit is a residual standard deviation or a term
+sitting on ln dS, and none is a reported quantity. Four correlations are credible in all
+four fits and agree to within 0.05: genome length with intron length at +0.68, dS with
+omega at -0.59 (mechanical, since omega carries dS in its denominator), GC with omega at
+-0.47 and GC with gene count at +0.37.
+
+**Neither flight axis correlates with anything**, under either coding, trimmed or not.
+Migration's phylogenetic standard deviation spans [0.08, 4.71], because its lambda is 0.00
+and a phylogenetic covariance model has nothing to estimate from a trait with no
+phylogenetic signal. Its variance lives at the tips, which is what the sister pairs read.
 
 The first specification used ln dN and ln dS and would not converge (Rhat 1.99, 40
 divergences, an hour without finishing). Two measured causes: ln dN and ln dS correlate at

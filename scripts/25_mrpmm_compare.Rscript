@@ -1,0 +1,250 @@
+# 25_mrpmm_compare.Rscript
+#
+# Compares the MR-PMM across four specifications and reports which conclusions depend on
+# the specification and which do not.
+#
+# ---------------------------------------------------------------------------------
+# WHY FOUR FITS
+#
+# The reference fit is seven responses on 83 taxa, with ln(mass / wing length^2) as the
+# flight response. It came back with 795 divergent transitions and two parameters that
+# would not mix, so two targeted variants follow. Each changes ONE thing.
+#
+#   1. TRIM. Three of seven responses were right-skewed, and each skew traced to a single
+#      taxon: Aptenodytes forsteri on the flight index (robust z +6.9), Phalacrocorax
+#      carbo on omega (+6.0), Dryobates pubescens on GC (+6.0). Removing those three
+#      brings every skew inside |0.9| and every kurtosis inside [-0.6, 0.9], so a Gaussian
+#      response becomes an approximation that holds. One of the two parameters that failed
+#      to mix was the residual sd of the very response the penguin distorts.
+#
+#   2. MIGRATION IN PLACE OF LOADING. Migration is the axis on which the sister-pair
+#      analysis finds genome-wide signal, and loading is the axis on which it finds none.
+#      Swapping them asks whether the across-tree model agrees. Migration is binary, so it
+#      is fitted as a threshold model with a Bernoulli family, and its phylogenetic
+#      correlations describe the latent liability rather than the indicator.
+#
+# NOT RUN: RESIDUAL CORRELATION, AND WHY NOT. Restoring set_rescor(TRUE) was considered
+# once the trim had fixed the skew. It was ruled out on measurement, not on taste. The
+# term failed originally because three responses had almost no non-phylogenetic variance
+# for a residual correlation to be estimated from, and TRIMMING MAKES THAT WORSE:
+#
+#        response        lambda, 83 taxa   lambda, 80 taxa
+#        ln dS                     1.025             1.079
+#        loading index             0.960             1.026
+#        GC                        0.912             1.004
+#
+# Lambda at or above 1 means the non-phylogenetic variance wants to be zero. The outliers
+# were the main source of departure from the tree, so removing them leaves data that look
+# MORE Brownian, not less, and pushes all three further onto the boundary. A trimmed fit
+# with residual correlation would be worse conditioned than the one that already failed.
+#
+# Migration cannot rescue it either, for a plain software reason: brms cannot estimate
+# residual correlation across response families, and migration is Bernoulli. set_rescor
+# is refused in script 23 when any response is binary.
+#
+# The one specification in which the term could be estimated is a reduced model holding
+# only the responses with real residual variance, namely ln omega (lambda 0.00), ln mean
+# intron length (0.00), ln gene count (0.31) and ln genome length (0.60). That would buy
+# six residual correlations at the price of dropping dS, the flight index and GC, which
+# are the responses the study is about. It has not been run.
+#
+# NOT RUN: A FIT DROPPING ln dS. It was prepared and abandoned. Its purpose was to
+# separate selection from mutation, but the sister-pair models answer that already and
+# answer it more directly: migration moves dN (p_adj 0.008) and dS (0.015) while leaving
+# omega untouched (0.240). Spending hours to confirm a null that is already measured was
+# not worth the compute. The option survives as MRPMM_RATES=omega in script 23.
+#
+# Sampler settings are held fixed at 4 chains, 4000 iterations and adapt_delta 0.95 across
+# all three, so differences in convergence are attributable to the specification and not
+# to the tuning.
+#
+# ---------------------------------------------------------------------------------
+# HOW TO READ THE OUTPUT
+#
+# A correlation credible in every fit where it can appear is a finding. One credible only
+# in the untrimmed fit is a single bird wearing a lab coat. The migration fit shares five
+# of its seven responses with the other two, so those five pairs are directly comparable
+# across all three, while pairs involving the flight response exist in only one column.
+#
+# Requires: brms
+# In:  ../output/mrpmm_fit_norescor*.Rdata
+# Out: ../output/mrpmm_variant_comparison.csv, ../output/mrpmm_variant_convergence.csv,
+#      ../figures/Fig3b_mrpmm_variants.pdf
+
+suppressMessages(library(brms))
+
+variants <- data.frame(
+  key   = c("norescor",        "norescor_rz4",    "norescor_mig",      "norescor_mig_rz4"),
+  label = c("loading, 83 tax", "loading, 80 tax", "migration, 83 tax", "migration, 80 tax"),
+  stringsAsFactors = FALSE)
+variants$file <- paste0("../output/mrpmm_fit_", variants$key, ".Rdata")
+
+# Each fit object is about 76 Mb, which is the only reason to delete one. Everything this
+# script needs from a fit is harvested into the two small files below the first time it is
+# seen, and a variant whose fit object has since been deleted is then read from that cache
+# instead. So a fit can be removed from disk once this script has run over it, and the
+# comparison still rebuilds.
+HARV_C <- "../output/mrpmm_harvest_cors.csv"
+HARV_V <- "../output/mrpmm_harvest_conv.csv"
+old_c <- if (file.exists(HARV_C)) read.csv(HARV_C, stringsAsFactors = FALSE) else NULL
+old_v <- if (file.exists(HARV_V)) read.csv(HARV_V, stringsAsFactors = FALSE) else NULL
+
+variants$source <- ifelse(file.exists(variants$file), "fit",
+                   ifelse(variants$key %in% old_c$key, "cache", "absent"))
+for (i in seq_len(nrow(variants)))
+  cat(sprintf("%-20s %s\n", variants$key[i],
+              switch(variants$source[i], fit = "read from fit object",
+                     cache = "fit object gone, read from harvest cache",
+                     absent = "NOT AVAILABLE, skipped")))
+variants <- variants[variants$source != "absent", ]
+stopifnot(nrow(variants) >= 2)
+
+
+# ---- 1. Extract from each fit in turn ----
+#
+# One fit is held in memory at a time. Each is about 80 Mb, so loading all four at once
+# is avoidable waste.
+
+# brms strips non-alphanumeric characters from response names, so ln_ds becomes lnds.
+# The key below recovers an unordered trait pair from a parameter name, and sorts it, so
+# that the same pair carries the same label whatever order brms happened to use.
+pair_key <- function(term) {
+  p <- gsub("^cor_phylo__|_Intercept", "", term)
+  v <- strsplit(p, "__")[[1]]
+  paste(sort(v), collapse = " ~ ")
+}
+
+conv <- list(); cors <- list()
+for (i in seq_len(nrow(variants))) {
+  if (variants$source[i] == "cache") {
+    conv[[i]] <- old_v[old_v$key == variants$key[i], ]
+    cors[[i]] <- old_c[old_c$key == variants$key[i], ]
+    next
+  }
+  e <- new.env()
+  load(variants$file[i], envir = e)
+  fit <- e$fit
+
+  su <- as.data.frame(rstan::summary(fit$fit)$summary)
+  su <- su[!grepl("^lp__|^z_", rownames(su)), ]
+  np <- nuts_params(fit)
+  conv[[i]] <- data.frame(
+    variant      = variants$label[i],
+    key          = variants$key[i],
+    n_taxa       = nobs(fit),
+    n_responses  = length(e$vars),
+    max_rhat     = max(su$Rhat, na.rm = TRUE),
+    n_rhat_above = sum(su$Rhat > 1.05, na.rm = TRUE),
+    min_ess      = min(su$n_eff, na.rm = TRUE),
+    divergences  = sum(np$Value[np$Parameter == "divergent__"]),
+    draws        = ndraws(fit),
+    stringsAsFactors = FALSE)
+
+  dr <- as_draws_df(fit)
+  cl <- grep("^cor_phylo__", names(dr), value = TRUE)
+  cors[[i]] <- do.call(rbind, lapply(cl, function(c0) {
+    v <- dr[[c0]]
+    data.frame(key = variants$key[i], variant = variants$label[i],
+               pair = pair_key(c0), mean = mean(v),
+               lwr = unname(quantile(v, .025)), upr = unname(quantile(v, .975)),
+               stringsAsFactors = FALSE)
+  }))
+  rm(fit, dr, e); invisible(gc())
+}
+conv <- do.call(rbind, conv)
+cors <- do.call(rbind, cors)
+cors$credible <- cors$lwr > 0 | cors$upr < 0
+
+# Refresh the cache, keeping rows for any variant not seen on this pass.
+keep_c <- if (is.null(old_c)) NULL else old_c[!old_c$key %in% cors$key, ]
+keep_v <- if (is.null(old_v)) NULL else old_v[!old_v$key %in% conv$key, ]
+write.csv(rbind(keep_c, cors[, setdiff(names(cors), "credible")]), HARV_C, row.names = FALSE)
+write.csv(rbind(keep_v, conv), HARV_V, row.names = FALSE)
+
+cat("\n=== Convergence across specifications ===\n\n")
+print(format(conv[, c("variant", "n_taxa", "n_responses", "max_rhat",
+                      "n_rhat_above", "min_ess", "divergences")], digits = 3),
+      row.names = FALSE)
+write.csv(conv, "../output/mrpmm_variant_convergence.csv", row.names = FALSE)
+
+
+# ---- 2. Which correlations hold across specifications ----
+
+pairs_all <- unique(cors$pair)
+wide <- data.frame(pair = pairs_all, stringsAsFactors = FALSE)
+for (k in variants$key) {
+  s <- cors[cors$key == k, ]
+  j <- match(wide$pair, s$pair)
+  wide[[paste0(k, "_mean")]] <- s$mean[j]
+  wide[[paste0(k, "_cred")]] <- s$credible[j]
+}
+cred_cols <- grep("_cred$", names(wide), value = TRUE)
+wide$n_fitted   <- rowSums(!is.na(wide[, cred_cols, drop = FALSE]))
+wide$n_credible <- rowSums(wide[, cred_cols, drop = FALSE], na.rm = TRUE)
+wide$verdict <- with(wide, ifelse(
+  n_credible == 0, "null in every fit",
+  ifelse(n_credible == n_fitted, "credible in every fit where present",
+         "specification dependent")))
+wide <- wide[order(-wide$n_credible, wide$pair), ]
+write.csv(wide, "../output/mrpmm_variant_comparison.csv", row.names = FALSE)
+
+fmt <- function(m, cr) ifelse(is.na(m), "    .  ",
+                              sprintf("%+.2f%s", m, ifelse(cr, "*", " ")))
+cat("\n=== Phylogenetic correlations, * marks a 95% interval excluding zero ===\n\n")
+hdr <- sprintf("%-34s %s", "trait pair",
+               paste(sprintf("%-16s", variants$label), collapse = ""))
+cat(hdr, "\n", strrep("-", nchar(hdr)), "\n", sep = "")
+for (i in seq_len(nrow(wide))) {
+  cells <- vapply(variants$key, function(k)
+    fmt(wide[[paste0(k, "_mean")]][i], wide[[paste0(k, "_cred")]][i]), character(1))
+  cat(sprintf("%-34s %s  %s\n", wide$pair[i],
+              paste(sprintf("%-16s", cells), collapse = ""), ""))
+}
+
+cat("\n=== Verdicts ===\n\n")
+for (v in c("credible in every fit where present", "specification dependent",
+            "null in every fit")) {
+  w <- wide$pair[wide$verdict == v]
+  cat(v, " (", length(w), ")\n", sep = "")
+  if (length(w)) cat(paste0("   ", w, collapse = "\n"), "\n")
+}
+
+
+# ---- 3. Figure ----
+#
+# A forest plot per trait pair, the four specifications offset within each row. Okabe-Ito
+# colours, which are distinguishable under the common forms of colour blindness.
+
+sel <- wide$pair[wide$n_credible > 0]
+sel <- sel[seq_len(min(length(sel), 12))]
+if (!length(sel)) sel <- head(wide$pair, 8)
+pl <- cors[cors$pair %in% sel, ]
+pl$y <- match(pl$pair, rev(sel))
+pl$off <- (match(pl$key, variants$key) - (nrow(variants) + 1) / 2) * 0.16
+pal <- c("#0072B2", "#E69F00", "#009E73", "#CC79A7")[seq_len(nrow(variants))]
+names(pal) <- variants$key
+
+pdf("../figures/Fig3b_mrpmm_variants.pdf", width = 9.5, height = 0.42 * length(sel) + 2.2)
+par(mar = c(4.2, 15.5, 2.6, 1), tcl = -0.25, mgp = c(2.3, 0.5, 0))
+plot(NA, xlim = c(-1, 1), ylim = c(0.5, length(sel) + 0.5), axes = FALSE,
+     xlab = "phylogenetic correlation", ylab = "",
+     main = "Sensitivity of the MR-PMM to outlier trimming and to the choice of flight response",
+     font.main = 1, cex.main = 1)
+abline(v = 0, col = "grey80", lwd = 1)
+abline(h = seq_along(sel), col = "grey95", lwd = 8)
+for (i in seq_len(nrow(pl))) {
+  yy <- pl$y[i] + pl$off[i]
+  segments(pl$lwr[i], yy, pl$upr[i], yy, col = pal[pl$key[i]],
+           lwd = if (pl$credible[i]) 2.4 else 1.1)
+  points(pl$mean[i], yy, pch = 21, cex = 0.85, lwd = 0.6, col = "white",
+         bg = pal[pl$key[i]])
+}
+axis(1, at = seq(-1, 1, 0.5), cex.axis = 0.85)
+axis(2, at = seq_along(sel), labels = rev(sel), las = 2, cex.axis = 0.72, tick = FALSE)
+legend("topleft", inset = c(0, -0.02), bty = "n", cex = 0.72, horiz = FALSE,
+       lwd = 2.4, col = pal, legend = variants$label)
+box(bty = "l", col = "grey45")
+dev.off()
+cat("\nwritten ../figures/Fig3b_mrpmm_variants.pdf\n")
+cat("written ../output/mrpmm_variant_comparison.csv\n")
+cat("written ../output/mrpmm_variant_convergence.csv\n")

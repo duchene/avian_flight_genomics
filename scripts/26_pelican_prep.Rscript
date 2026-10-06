@@ -1,0 +1,144 @@
+# 26_pelican_prep.Rscript
+#
+# Builds the inputs for PELICAN, which tests whether amino acid preferences at a site
+# differ between foreground and background lineages.
+#
+# ---------------------------------------------------------------------------------
+# WHAT PELICAN ADDS THAT NOTHING ELSE HERE DOES
+#
+# Every analysis so far works at the gene level or above. A handful of sites under strong
+# directional selection in a handful of genes shifts neither genome-wide omega nor
+# gene-level omega detectably, so our null on omega says nothing about them. PELICAN works
+# per site, which is the one resolution we have not examined.
+#
+# It is a reimplementation of Tamuri et al. (2009), benchmarked by Duchemin et al. (2023)
+# as the most accurate of the phylogenetic methods for genome-scale shifts in directional
+# selection, and the fastest by a clear margin.
+#
+# ---------------------------------------------------------------------------------
+# THE PHENOTYPES, AND WHY THEY ARE CODED THIS WAY
+#
+# flight    REDUCED FLIGHT ABILITY, 15 tips. Flight loss proper is only 7 taxa, which is
+#           too few to estimate a foreground amino acid profile. Adding the 8 taxa curated
+#           as "limited" gives 15 across 14 sister pairs. One pair, MENNOV-ATRCLA, has
+#           BOTH sisters reduced, so 13 pairs carry a true within-pair contrast.
+#
+# migration 29 tips across 21 pairs. Better powered, but worse motivated: our pair-level
+#           result is a mutation-rate signature, with dN and dS moving together and omega
+#           flat. PELICAN detects selection on amino acids, which is not that mechanism.
+#           Prepared, not prioritised.
+#
+# loading   The continuous index. PELICAN 1.0.8 has `scan continuous`, so this needs no
+#           binarisation and the categorical predictor the referees attacked stays buried.
+#           Costlier than the discrete test, so it runs after the discrete pilot reports.
+#
+# TAXON LABELS. The dated tree carries binomials and the alignments carry six-letter
+# codes. They must agree, so the tree is relabelled to codes here rather than the 30,000
+# alignments being rewritten.
+#
+# Requires: ape
+# In:  ../output/traits_per_taxon.csv, ../data/dated.auk.tre, $AUK_ALIGNMENTS
+# Out: ../hpc/inputs/{pheno_flight,pheno_migration,pheno_loading}.tsv,
+#      ../hpc/inputs/tree_codes.nwk, ../hpc/inputs/{gene_manifest_eligible.csv,eligible_genes.txt},
+#      ../output/pelican/gene_manifest.csv, ../output/pelican/pilot_alignments/
+#
+# The small deterministic files go to hpc/inputs/ because that directory is tracked, so a
+# clone on the cluster carries them and only the alignments need a separate transfer.
+
+library(ape)
+
+ALN <- Sys.getenv("AUK_ALIGNMENTS", "~/Desktop/Research/auk/postshrink_alignments")
+ALN <- path.expand(ALN)
+OUT <- "../output/pelican"      # large or derived, gitignored
+KIT <- "../hpc/inputs"          # small and deterministic, tracked so a clone carries it
+N_PILOT <- as.integer(Sys.getenv("PELICAN_PILOT_N", "300"))
+set.seed(42)
+
+dir.create(OUT, showWarnings = FALSE, recursive = TRUE)
+dir.create(KIT, showWarnings = FALSE, recursive = TRUE)
+tr  <- read.csv("../output/traits_per_taxon.csv", stringsAsFactors = FALSE)
+phy <- read.tree("../data/dated.auk.tre")
+
+
+# ---- 1. Phenotypes ----
+
+tr$reduced <- ifelse(tr$ability %in% c("lost", "near lost", "limited"), "reduced", "full")
+tr$migr    <- ifelse(tr$migratory == 1, "migratory", "sedentary")
+
+write_pheno <- function(values, file) {
+  d <- data.frame(species = tr$code, traits = values, stringsAsFactors = FALSE)
+  write.table(d, file.path(KIT, file), sep = "\t", quote = FALSE, row.names = FALSE)
+  d
+}
+p_flight <- write_pheno(tr$reduced, "pheno_flight.tsv")
+p_migr   <- write_pheno(tr$migr,    "pheno_migration.tsv")
+p_load   <- write_pheno(tr$loading_index, "pheno_loading.tsv")
+
+fg <- tr$code[tr$reduced == "reduced"]
+cat("reduced-flight foreground:", length(fg), "tips across",
+    length(unique(tr$pair_id[tr$reduced == "reduced"])), "pairs\n")
+cat("  ", paste(fg, collapse = " "), "\n")
+cat("migratory foreground:", sum(tr$migr == "migratory"), "tips\n\n")
+
+
+# ---- 2. Tree, relabelled to six-letter codes ----
+
+i <- match(phy$tip.label, tr$tip)
+stopifnot(!anyNA(i))
+phy$tip.label <- tr$code[i]
+write.tree(phy, file.path(KIT, "tree_codes.nwk"))
+cat("tree relabelled to codes,", Ntip(phy), "tips, rooted:", is.rooted(phy), "\n\n")
+
+
+# ---- 3. Gene manifest ----
+#
+# Taxon counts come from the FASTA headers directly. A gene is eligible for the pilot only
+# if it carries enough of the foreground to estimate a profile at all.
+
+files <- list.files(ALN, pattern = "_NT\\.fasta$", full.names = TRUE)
+files <- files[!grepl("treefile$", files)]
+cat("alignments found:", length(files), "in", ALN, "\n")
+stopifnot(length(files) > 0)
+
+hdrs <- lapply(files, function(f) {
+  l <- readLines(f, warn = FALSE)
+  sub("^>", "", l[startsWith(l, ">")])
+})
+man <- data.frame(
+  file    = files,
+  gene    = sub("\\..*$", "", basename(files)),
+  n_taxa  = lengths(hdrs),
+  n_fg    = vapply(hdrs, function(h) sum(fg %in% h), integer(1)),
+  stringsAsFactors = FALSE)
+man$n_bg <- man$n_taxa - man$n_fg
+write.csv(man, file.path(OUT, "gene_manifest.csv"), row.names = FALSE)
+
+cat("\ntaxa per gene:    median", median(man$n_taxa), " range",
+    min(man$n_taxa), "to", max(man$n_taxa), "\n")
+cat("foreground per gene: median", median(man$n_fg), " range",
+    min(man$n_fg), "to", max(man$n_fg), "\n")
+
+
+# ---- 4. Pilot subset ----
+#
+# A random sample among eligible genes, so the hit rate extrapolates to the full screen.
+# Eligibility is a floor on sampling, not a filter on signal.
+
+ok <- man$n_taxa >= 70 & man$n_fg >= 12
+cat("\neligible (>=70 taxa and >=12 of 15 foreground):", sum(ok), "of", nrow(man), "\n")
+
+# The eligible list and its manifest go to the tracked kit, because the cluster scripts
+# read them and a clone should carry everything except the alignments themselves.
+write.csv(man[ok, ], file.path(KIT, "gene_manifest_eligible.csv"), row.names = FALSE)
+writeLines(basename(man$file[ok]), file.path(KIT, "eligible_genes.txt"))
+sel <- man[ok, ][sample(sum(ok), min(N_PILOT, sum(ok))), ]
+
+pdir <- file.path(OUT, "pilot_alignments")
+unlink(pdir, recursive = TRUE); dir.create(pdir, recursive = TRUE)
+# PELICAN reads a whole directory, which must hold ONLY alignments, so the sibling
+# .treefile files are deliberately not linked.
+ok_link <- file.symlink(normalizePath(sel$file), file.path(pdir, basename(sel$file)))
+stopifnot(all(ok_link))
+cat("pilot set:", nrow(sel), "alignments symlinked into", pdir, "\n")
+cat("  median taxa", median(sel$n_taxa), "| median foreground", median(sel$n_fg), "\n")
+write.csv(sel, file.path(OUT, "pilot_genes.csv"), row.names = FALSE)

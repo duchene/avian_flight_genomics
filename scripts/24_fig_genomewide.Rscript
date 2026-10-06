@@ -1,0 +1,220 @@
+# 24_fig_genomewide.Rscript
+#
+# The genome-wide result: migration displaces the whole distribution of per-gene
+# rate-trait associations on dS and dN, while the flight index and flight loss sit on the
+# null. The signal is real in aggregate but not localisable to individual genes.
+#
+# WHY THESE FORMS. The effect is a shift of thousands of genes, not a handful of outliers:
+# on dS the median per-gene correlation is +0.164 for migration against -0.068 for the
+# flight index, with 78 percent of genes positive against 33 percent. A volcano plot would
+# foreground individual hits, of which there is one, and would read as "no result" when the
+# result is that the whole distribution moves. So:
+#
+#   row 1  ECDF of the per-gene correlation. Shows displacement directly.
+#   row 2  QQ plot of p-values against uniform, with a permutation envelope. Quantifies
+#          the excess AND demonstrates the other screens are calibrated, which pre-empts
+#          the objection that the test is simply liberal.
+#   row 3  The pair-level comparison that IS significant, connecting the diffuse per-gene
+#          picture to the aggregate test in script 16.
+#
+# The envelope permutes the trait across pairs and recomputes every gene, so it captures
+# the dependence between genes that share the same 42 pairs. An analytic Beta envelope
+# would assume independence and be too narrow.
+#
+# COLOUR. Okabe-Ito, designed for colour-vision deficiency. Line type varies with
+# phenotype as well, so identity is never carried by colour alone.
+#
+# Requires: none beyond base R
+# In:  ../output/contrast_screen.csv, ../output/rate_contrasts.csv,
+#      ../output/traits_contrasts.csv, ../output/traits_per_taxon.csv,
+#      ../data/dnds_sisdifs_vol.Rdata
+# Out: ../figures/Fig6_genomewide.pdf
+
+set.seed(42)
+N_PERM <- 200
+
+res   <- read.csv("../output/contrast_screen.csv", stringsAsFactors = FALSE)
+pairs <- read.csv("../output/rate_contrasts.csv", stringsAsFactors = FALSE)
+contr <- read.csv("../output/traits_contrasts.csv", stringsAsFactors = FALSE)
+taxa  <- read.csv("../output/traits_per_taxon.csv", stringsAsFactors = FALSE)
+load("../data/dnds_sisdifs_vol.Rdata")
+dir.create("../figures", showWarnings = FALSE)
+
+RATES <- c(dS = "dS", dN = "dN", omega = "omega")
+PH    <- c(migration = "migration", loading = "loading", flightloss = "flightloss")
+PAL   <- c(migration = "#0072B2", loading = "#E69F00", flightloss = "#009E73")
+LTY   <- c(migration = 1,         loading = 2,         flightloss = 4)
+LAB   <- c(migration = "migration gain", loading = "flight index",
+           flightloss = "flight loss")
+
+lesser <- taxa$code[taxa$sister == "lesser"]
+contr$comparison <- sub("-[A-Z]{2}$", "", contr$pair_id)
+# as.character is load-bearing: comparison is a factor in the Rdata, and indexing a named
+# vector with a factor uses its integer codes rather than its labels.
+TRAIT <- list(migration  = setNames(contr$migration_pair,   contr$comparison),
+              loading    = setNames(contr$d_loading,        contr$comparison),
+              flightloss = setNames(contr$flight_loss_pair, contr$comparison))
+
+
+# ---- 1. Gene-by-pair matrix, used for the permutation envelope ----
+
+build_matrix <- function(d) {
+  d <- d[is.finite(d$moldiff) & d$moldiff > 0, ]
+  d$y <- ifelse(d$sp1 %in% lesser, -1, 1) * log(d$moldiff)
+  g <- as.character(d$locus); cmp <- as.character(d$comparison)
+  ug <- unique(g); uc <- unique(cmp)
+  m <- matrix(NA_real_, length(ug), length(uc), dimnames = list(ug, uc))
+  m[cbind(match(g, ug), match(cmp, uc))] <- d$y
+  m[rowSums(!is.na(m)) >= 20, , drop = FALSE]
+}
+
+# row-wise correlation of a matrix against one vector, pairwise-complete.
+#
+# x MUST be reordered to the matrix columns by NAME. The matrix columns are in data order
+# while the trait vector is in trait-table order, so filling positionally pairs every gene
+# with the wrong pair's trait. This is the third occurrence of that bug class in this
+# pipeline; the assertion below makes a fourth impossible.
+row_cor <- function(m, x) {
+  stopifnot(!is.null(names(x)), all(colnames(m) %in% names(x)))
+  x <- x[colnames(m)]
+  ok <- !is.na(m) & !is.na(rep(x, each = nrow(m)))
+  xm <- matrix(x, nrow(m), ncol(m), byrow = TRUE); xm[!ok] <- NA
+  mm <- m; mm[!ok] <- NA
+  n  <- rowSums(ok)
+  mx <- rowMeans(xm, na.rm = TRUE); my <- rowMeans(mm, na.rm = TRUE)
+  cx <- xm - mx; cy <- mm - my
+  num <- rowSums(cx * cy, na.rm = TRUE)
+  den <- sqrt(rowSums(cx^2, na.rm = TRUE) * rowSums(cy^2, na.rm = TRUE))
+  r <- num / den
+  list(r = r, n = n)
+}
+
+envelope <- function(m, x, nperm = N_PERM) {
+  # permute the trait across pairs, recompute every gene, and record the sorted
+  # -log10(p) curve. Keeps the between-gene dependence that an analytic null would miss.
+  keep <- !is.na(x)
+  curves <- replicate(nperm, {
+    xp <- x; xp[keep] <- sample(x[keep])
+    rc <- row_cor(m, xp)
+    tt <- rc$r * sqrt((rc$n - 2) / (1 - rc$r^2))
+    p  <- 2 * pt(-abs(tt), rc$n - 2)
+    sort(-log10(p[is.finite(p)]), decreasing = TRUE)
+  }, simplify = FALSE)
+  k <- min(lengths(curves))
+  mat <- vapply(curves, function(v) v[seq_len(k)], numeric(k))
+  list(lo = apply(mat, 1, quantile, 0.025), hi = apply(mat, 1, quantile, 0.975))
+}
+
+cat("building gene-by-pair matrices\n")
+MATS <- list(dS = build_matrix(sisdifggds), dN = build_matrix(sisdifggdn),
+             omega = build_matrix(sisdifggdnds))
+for (nm in names(MATS)) cat("  ", nm, ": ", nrow(MATS[[nm]]), " genes\n", sep = "")
+
+
+# ---- 2. Figure ----
+
+pdf("../figures/Fig6_genomewide.pdf", width = 11, height = 9.5)
+layout(matrix(1:9, nrow = 3, byrow = TRUE))
+par(mar = c(4.2, 4.6, 3, 1), tcl = -0.25, mgp = c(2.6, 0.5, 0), cex.axis = 0.85)
+
+# -- row 1: ECDF of the per-gene correlation --
+for (rt in RATES) {
+  d <- res[res$rate == rt, ]
+  plot(NA, xlim = c(-0.8, 0.8), ylim = c(0, 1), xlab = "", ylab = "",
+       main = rt, font.main = 1, cex.main = 1.05)
+  abline(v = 0, col = "grey88", lwd = 1)
+  for (ph in PH) {
+    v <- sort(d$r[d$phenotype == ph])
+    if (!length(v)) next
+    lines(v, seq_along(v) / length(v), col = PAL[ph], lty = LTY[ph], lwd = 2.1)
+  }
+  mtext("per-gene correlation r", side = 1, line = 2.4, cex = 0.72)
+  mtext("cumulative fraction of genes", side = 2, line = 2.7, cex = 0.72)
+  if (rt == "dS") legend("topleft", bty = "n", cex = 0.78, lwd = 2.1, seg.len = 1.8,
+                         col = PAL[PH], lty = LTY[PH], legend = LAB[PH])
+  box(bty = "l", col = "grey45")
+}
+
+# -- row 2: QQ of p-values, each phenotype against ITS OWN permutation envelope --
+#
+# One envelope per phenotype is essential. A binary 21/21 contrast and a continuous index
+# do not share a null: their permutation distributions differ in shape, so a single band
+# would make one curve look anomalous and another innocent for the wrong reason.
+cat("computing permutation envelopes, one per phenotype\n")
+ENV <- list(); EXC <- NULL
+for (rt in names(MATS)) for (ph in PH) {
+  ENV[[paste(rt, ph)]] <- envelope(MATS[[rt]], TRAIT[[ph]])
+  # The decisive summary: does the observed fraction of genes below p = 0.05 exceed what
+  # permuting pair labels produces? The parametric null treats genes as independent, but
+  # all of them share the same 42 pairs, so one extreme pair moves every gene together.
+  m <- MATS[[rt]]; x <- TRAIT[[ph]]
+  frac <- function(xv) { rc <- row_cor(m, xv)
+    tt <- rc$r * sqrt((rc$n - 2) / (1 - rc$r^2))
+    mean(2 * pt(-abs(tt), rc$n - 2) < 0.05, na.rm = TRUE) }
+  obs <- frac(x)
+  keep <- !is.na(x)
+  nullv <- replicate(N_PERM, { xp <- x; xp[keep] <- sample(x[keep]); frac(xp) })
+  EXC <- rbind(EXC, data.frame(rate = rt, phenotype = ph, observed = obs,
+                 null_mean = mean(nullv), lo = quantile(nullv, .025),
+                 hi = quantile(nullv, .975), perm_p = mean(nullv >= obs),
+                 row.names = NULL))
+  cat("  ", rt, ph, "\n")
+}
+cat("\nGenome-wide excess, observed against a permutation null of pair labels.\n")
+cat("A parametric null would assume genes are independent; they are not.\n\n")
+print(format(EXC, digits = 3), row.names = FALSE)
+write.csv(EXC, "../output/genomewide_excess.csv", row.names = FALSE)
+
+for (rt in RATES) {
+  d <- res[res$rate == rt, ]
+  ymax <- 6
+  plot(NA, xlim = c(0, 4.3), ylim = c(0, ymax), xlab = "", ylab = "",
+       main = paste(rt, "observed vs expected"), font.main = 1, cex.main = 1.05)
+  # each phenotype's own envelope, in its own hue, drawn faint and behind
+  for (ph in PH) {
+    e <- ENV[[paste(rt, ph)]]; k <- length(e$lo); ex <- -log10(ppoints(k))
+    polygon(c(ex, rev(ex)), c(e$hi, rev(e$lo)),
+            col = adjustcolor(PAL[ph], alpha.f = 0.18), border = NA)
+  }
+  abline(0, 1, col = "grey45", lty = 2)
+  for (ph in PH) {
+    o <- sort(-log10(d$p[d$phenotype == ph & d$p > 0]), decreasing = TRUE)
+    if (!length(o)) next
+    lines(-log10(ppoints(length(o))), o, col = PAL[ph], lty = LTY[ph], lwd = 2.1)
+  }
+  mtext(expression(expected~-log[10]~p), side = 1, line = 2.4, cex = 0.72)
+  mtext(expression(observed~-log[10]~p), side = 2, line = 2.7, cex = 0.72)
+  if (rt == "dS") legend("topleft", bty = "n", cex = 0.7,
+                         legend = c("shaded: each phenotype's own 95% envelope",
+                                    "dashed: uniform expectation"))
+  box(bty = "l", col = "grey45")
+}
+
+# -- row 3: the pair-level comparison that is significant --
+for (rt in names(RATES)) {
+  col <- paste0("med_logratio_", c(dS = "ds", dN = "dn", omega = "w")[rt])
+  y <- pairs[[col]]; g <- factor(pairs$migration_pair, 0:1,
+                                 c("no change", "migration gain"))
+  plot(NA, xlim = c(0.5, 2.5), ylim = range(y) + c(-0.05, 0.08) * diff(range(y)),
+       axes = FALSE, xlab = "", ylab = "", main = paste(rt, "by pair"),
+       font.main = 1, cex.main = 1.05)
+  abline(h = 0, col = "grey88")
+  for (i in 1:2) {
+    v <- y[as.integer(g) == i]
+    jit <- seq(-0.17, 0.17, length.out = length(v))
+    segments(i - 0.3, median(v), i + 0.3, median(v), lwd = 2.4, col = "grey25")
+    points(i + jit, v, pch = 21, cex = 1.15, lwd = 0.7, col = "white",
+           bg = c("grey70", PAL["migration"])[i])
+  }
+  axis(1, at = 1:2, labels = levels(g), cex.axis = 0.8)
+  axis(2, las = 1)
+  mtext("median log(greater / lesser)", side = 2, line = 2.9, cex = 0.72)
+  pv <- suppressWarnings(wilcox.test(y ~ g)$p.value)
+  legend("topleft", bty = "n", cex = 0.75, legend = sprintf("Wilcoxon p = %.3g", pv))
+  box(bty = "l", col = "grey45")
+}
+
+dev.off()
+cat("\nwritten ../figures/Fig6_genomewide.pdf\n")
+cat("Row 1 shows the shift, row 2 shows it exceeds a permutation null and that the\n")
+cat("other screens are calibrated, row 3 shows the aggregate test that is significant.\n")

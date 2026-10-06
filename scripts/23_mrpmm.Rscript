@@ -98,7 +98,54 @@ if (QUICK) { CHAINS <- 2; ITER <- 600; WARMUP <- 300 }
 # Residual correlation is OFF by default. See the block below for why. Set MRPMM_RESCOR=TRUE
 # to reproduce the version that fails, which is retained as evidence.
 RESCOR <- as.logical(Sys.getenv("MRPMM_RESCOR", "FALSE"))
-SUF    <- if (RESCOR) "_rescor" else "_norescor"
+
+# WHICH RATE RESPONSES ARE FITTED.
+#
+#   both   ln dS and ln omega, the seven-response default
+#   omega  ln dS dropped. Asks whether anything attributed to molecular rates survives
+#          when only the selection term is present
+#   ds     ln omega dropped, the mirror image
+#
+# The two rate responses are not independent. Omega carries dS in its denominator, so a
+# model holding both estimates a correlation between them that is partly mechanical, and
+# any trait correlating with dS is pulled onto omega with the opposite sign. Dropping dS
+# also removes sigma_lnds, one of only two parameters that failed to mix in the
+# seven-response fit.
+RATES <- Sys.getenv("MRPMM_RATES", "both")
+stopifnot(RATES %in% c("both", "omega", "ds"))
+
+# OUTLIER TRIM. "rz4" drops any taxon lying more than 4 median absolute deviations from
+# the median on ANY of the seven responses. The rule is applied to all seven whatever
+# RATES asks for, so the trimmed sample is identical across the rate variants and the
+# comparison between them is not confounded by a change of taxa.
+TRIM <- Sys.getenv("MRPMM_TRIM", "none")
+stopifnot(TRIM %in% c("none", "rz4"))
+
+# WHICH FLIGHT RESPONSE.
+#
+#   loading    ln(mass / wing length^2), the continuous index
+#   migration  the binary migratory phenotype, 29 taxa against 54
+#
+# They swap rather than coexist. Both describe how much flying a bird does, and fitting
+# them together would ask the model to separate two descriptions of one axis.
+#
+# Migration is binary, so it enters with a Bernoulli family. This is Felsenstein's
+# threshold model: an unobserved liability evolves on the tree, and a bird migrates when
+# its liability crosses zero. The phylogenetic correlations then describe how that
+# liability covaries with the continuous responses, on the same scale as all the others.
+#
+# The cost is that a Bernoulli response has no residual scale parameter. Its phylogenetic
+# standard deviation therefore carries all of the latent variance, against a logistic
+# error whose variance is fixed at pi^2 / 3, which makes it more weakly identified than
+# a Gaussian response. Its priors below are widened accordingly, and set_rescor(TRUE) is
+# refused outright because brms cannot estimate residual correlation across families.
+FLIGHT <- Sys.getenv("MRPMM_FLIGHT", "loading")
+stopifnot(FLIGHT %in% c("loading", "migration"))
+
+SUF <- paste0(if (RESCOR) "_rescor" else "_norescor",
+              switch(RATES, both = "", omega = "_noDS", ds = "_noW"),
+              switch(FLIGHT, loading = "", migration = "_mig"),
+              if (TRIM == "none") "" else paste0("_", TRIM))
 
 dir.create("../output", showWarnings = FALSE)
 dir.create("../figures", showWarnings = FALSE)
@@ -156,12 +203,64 @@ tr$busco        <- num(g[["Complete BUSCOs (C, %)"]])
 
 # ---- 3. Model frame ----
 
-vars <- c("ln_ds", "ln_w", "loading_index", "ln_len", "ln_genes", "gc", "ln_intronlen")
-dd <- tr[, c("tip", "code", "species", "ability", "style", vars, "busco")]
-dd <- dd[complete.cases(dd[, c(vars, "busco")]), ]
+# The seven continuous responses of the reference specification. This vector also defines
+# the outlier rule below and never changes, so the trimmed sample is identical in every
+# variant and no comparison is confounded by a change of taxa.
+trim_vars <- c("ln_ds", "ln_w", "loading_index", "ln_len", "ln_genes", "gc", "ln_intronlen")
+flight_var <- switch(FLIGHT, loading = "loading_index", migration = "migratory")
+all_vars   <- sub("loading_index", flight_var, trim_vars, fixed = TRUE)
+
+keep <- unique(c(trim_vars, all_vars, "busco"))
+dd <- tr[, c("tip", "code", "species", "ability", "style", keep)]
+dd <- dd[complete.cases(dd[, keep]), ]
 dropped <- setdiff(tr$tip, dd$tip)
-cat("taxa in the model:", nrow(dd), "of 84\n")
+cat("taxa with complete data:", nrow(dd), "of 84\n")
 if (length(dropped)) cat("dropped for missing data:", paste(dropped, collapse = ", "), "\n")
+
+
+# ---- 3a. Outlier trim ----
+#
+# Robust z is (x - median) / MAD, which unlike an ordinary z-score is not itself inflated
+# by the outliers it is meant to find. It is computed on all seven responses whatever
+# RATES asks for, so the with-dS and without-dS fits always run on the same taxa.
+
+rz <- sapply(trim_vars, function(v) (dd[[v]] - median(dd[[v]])) / mad(dd[[v]]))
+rownames(rz) <- dd$species
+worst_var <- trim_vars[apply(abs(rz), 1, which.max)]
+worst_z   <- rz[cbind(seq_len(nrow(rz)), apply(abs(rz), 1, which.max))]
+ext <- which(abs(worst_z) > 4)
+
+cat("\ntaxa beyond 4 MAD on any response:\n")
+if (!length(ext)) cat("   none\n")
+for (i in ext) cat(sprintf("   %-26s %-28s %-14s robust z %+.1f\n",
+                           dd$species[i], dd$style[i], worst_var[i], worst_z[i]))
+
+if (TRIM == "rz4") {
+  dd <- dd[-ext, ]
+  cat("trim rz4 applied, taxa remaining:", nrow(dd), "\n")
+} else {
+  cat("no trim, all", nrow(dd), "taxa retained\n")
+}
+
+vars <- switch(RATES,
+               both  = all_vars,
+               omega = setdiff(all_vars, "ln_ds"),
+               ds    = setdiff(all_vars, "ln_w"))
+dd <- dd[, c("tip", "code", "species", "ability", "style", vars, "busco")]
+
+# A response taking only the values 0 and 1 is fitted as Bernoulli, never standardised,
+# and given its own priors. Detection is by value rather than by name so that adding a
+# further binary response later needs no edit here.
+binary_vars <- vars[vapply(vars, function(v) all(dd[[v]] %in% c(0, 1)), logical(1))]
+if (length(binary_vars) && RESCOR)
+  stop("set_rescor(TRUE) cannot be combined with a Bernoulli response in brms. ",
+       "Run with MRPMM_RESCOR=FALSE.", call. = FALSE)
+
+cat("fitting", length(vars), "responses:", paste(vars, collapse = ", "), "\n")
+if (length(binary_vars))
+  cat("Bernoulli responses:", paste(binary_vars, collapse = ", "), "| counts:",
+      paste(vapply(binary_vars, function(v) paste0(sum(dd[[v]] == 1), "/", nrow(dd)),
+                   character(1)), collapse = ", "), "\n")
 
 # ---- 3b. Pre-fit diagnostics ----
 #
@@ -184,6 +283,9 @@ diag_tab <- do.call(rbind, lapply(vars, function(v) {
              lambda = lam, row.names = NULL)
 }))
 diag_tab$flag <- ifelse(abs(diag_tab$skew) > 1.5 | diag_tab$kurtosis > 5, "SKEWED", "")
+# Skew and kurtosis are meaningless for a 0/1 variable, and lambda there is the signal in
+# the raw indicator rather than in the liability the model actually fits.
+diag_tab$flag[diag_tab$variable %in% binary_vars] <- "BINARY"
 write.csv(diag_tab, paste0("../output/mrpmm_diagnostics", SUF, ".csv"), row.names = FALSE)
 cat("\nResponse diagnostics:\n\n")
 print(format(diag_tab, digits = 3), row.names = FALSE)
@@ -206,7 +308,7 @@ if (any(diag_tab$flag == "SKEWED")) {
 
 
 # Standardise so that the covariance matrices are correlations and the priors are sane.
-for (v in vars) dd[[v]] <- as.numeric(scale(dd[[v]]))
+for (v in setdiff(vars, binary_vars)) dd[[v]] <- as.numeric(scale(dd[[v]]))
 dd$busco <- as.numeric(scale(dd$busco))
 
 phy <- drop.tip(phy, setdiff(phy$tip.label, dd$tip))
@@ -232,7 +334,8 @@ stopifnot(identical(dd$phylo, rownames(A)))
 # covariance. The split between the two is the whole point of the method.
 
 bf_list <- lapply(vars, function(v) {
-  bf(as.formula(paste0(v, " ~ busco + (1|p|gr(phylo, cov = A))")))
+  bf(as.formula(paste0(v, " ~ busco + (1|p|gr(phylo, cov = A))")),
+     family = if (v %in% binary_vars) bernoulli() else gaussian())
 })
 form <- Reduce(`+`, bf_list) + set_rescor(RESCOR)
 
@@ -240,13 +343,20 @@ form <- Reduce(`+`, bf_list) + set_rescor(RESCOR)
 # built per response rather than declared once. lkj(2) on both correlation matrices mildly
 # shrinks towards independence, which is the conservative choice here.
 resp_nm <- gsub("[^A-Za-z0-9]", "", vars)
+bin_nm  <- gsub("[^A-Za-z0-9]", "", binary_vars)
+gau_nm  <- setdiff(resp_nm, bin_nm)
 pr <- c(
-  do.call(c, lapply(resp_nm, function(r) prior_string("normal(0, 1)", class = "b", resp = r))),
+  # A Bernoulli response lives on the logit scale, where an effect of two is ordinary and
+  # the phylogenetic sd competes with a logistic error of variance pi^2 / 3. Both of its
+  # priors are therefore wider than the standardised Gaussian ones.
+  do.call(c, lapply(bin_nm, function(r) prior_string("normal(0, 2)", class = "b", resp = r))),
+  do.call(c, lapply(bin_nm, function(r) prior_string("student_t(3, 0, 2)", class = "sd", resp = r))),
+  do.call(c, lapply(gau_nm, function(r) prior_string("normal(0, 1)", class = "b", resp = r))),
   # Responses are standardised, so a phylogenetic sd much above 1 is implausible. The
   # brms default student_t(3, 0, 2.5) is diffuse enough that the sampler wanders into the
   # region where phylogenetic and residual variance trade off against each other, which
   # is where the chains failed to mix (Rhat 1.99 on a short run).
-  do.call(c, lapply(resp_nm, function(r) prior_string("student_t(3, 0, 1)", class = "sd", resp = r))),
+  do.call(c, lapply(gau_nm, function(r) prior_string("student_t(3, 0, 1)", class = "sd", resp = r))),
   prior(lkj(2), class = "cor"),
   if (RESCOR) prior(lkj(2), class = "rescor") else NULL)
 
@@ -271,7 +381,7 @@ cat("\nmax Rhat:", round(max_rhat, 4),
 if (max_rhat > 1.05) {
   warning("CHAINS HAVE NOT MIXED (Rhat > 1.05). Do not interpret the correlations below. ",
           "Separating phylogenetic from residual covariance is weakly identified with ",
-          "81 taxa. Options, in order: run without QUICK; drop to three responses; ",
+          nrow(dd), " taxa. Options, in order: run without QUICK; drop to three responses; ",
           "fix the phylogenetic signal rather than estimating it per response.",
           call. = FALSE)
 }

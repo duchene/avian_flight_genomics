@@ -1,17 +1,17 @@
 # STATUS
 
 Handoff note. Written for an assistant session resuming this work cold. Last updated
-3 October 2026.
+6 October 2026.
 
 ## Where things stand in one paragraph
 
 The manuscript "Avian flight accelerates genome evolution" was rejected by Nature Ecology
 and Evolution and then by Nature Communications, six referee reports in total. The project
 is being rebuilt for Molecular Biology and Evolution around a single continuous flight
-predictor instead of the categorical scheme every referee attacked. Scripts 01 to 22 are
-written and run. The per-gene screen is executing now, about 20 hours. Script 23 is on its third
-specification; the first two did not converge and are documented below. Only script 24, the figure
-assembly, remains unwritten.
+predictor instead of the categorical scheme every referee attacked. Scripts 01 to 26 are
+written and run. The per-gene screens are finished, the MR-PMM has been fitted in four
+specifications and compared, and the figures are drawn. The open work is a per-site PELICAN
+screen, which cannot run on this Mac and is packaged for GenomeDK in `hpc/`.
 
 ## Paths
 
@@ -310,3 +310,49 @@ clutch size and generation length, latitude, and pipeline-wide multiple-testing 
 
 Wait for the screen, then run `20_hyphaeon_collect` and `21_gsea`. Check whether the
 revised `23_mrpmm` converged. Write `24_figures` last, once the figures it assembles exist.
+
+
+## Added 6 October 2026
+
+### MR-PMM, settled
+
+Four fits, 9.2 hours each, in `output/mrpmm_fit_norescor*.Rdata`. `scripts/25_mrpmm_compare.Rscript`
+reports across them and caches what it needs into `output/mrpmm_harvest_*.csv`, so the
+76 Mb fit objects can be deleted without breaking the comparison.
+
+Four correlations are credible in all four and agree to within 0.05. Neither flight axis
+correlates with anything. Residual correlation stays off, and trimming outliers makes the
+case for it worse rather than better, which is measured in the header of script 25.
+
+**Read convergence by parameter block, not by headline Rhat.** Every failing parameter is
+a residual standard deviation or sits on ln dS. The 21 reported correlations are clean in
+all four fits.
+
+### PELICAN, packaged but not run
+
+The one resolution nothing here has examined is the individual site. A few sites under
+strong selection move neither genome-wide nor gene-level omega, so our null on omega says
+nothing about them.
+
+**It cannot be installed on this Mac.** Homebrew refuses to build opam because the Command
+Line Tools predate Xcode 26.3, and Docker Desktop 20.10.6 starts its backend but never
+opens a socket. Both need `sudo` and a system update. Do not spend another hour on this.
+
+`hpc/` is a complete GenomeDK kit: Apptainer pull, two smoke tests, a Slurm array and a
+collector. `hpc/inputs/` is tracked, so a clone carries everything except the alignments,
+which `hpc/make_transfer.sh` packs into a 113 Mb tarball.
+
+**The unresolved question is in `hpc/00_setup.sh`.** 7,087 of the 9,890 eligible genes have
+a taxon set no other gene shares, so if PELICAN insists that tree and alignment agree,
+batching is impossible and every gene needs its own pruned tree. The smoke test decides it
+and writes `pelican_mode.txt`. Do not guess, and do not skip it.
+
+PELICAN 1.0.8 has `scan continuous`, so the loading index needs no binarisation. Run order:
+flight (discrete, 15 tips), then loading (continuous, costlier), then migration (29 tips,
+best powered and worst motivated, since our result there is a mutation-rate signature).
+
+### Trap recorded
+
+**Do not edit a script while Rscript is executing it.** R parses lazily, so an edit lands
+mid-parse and kills the run. This cost the post-fit reporting of the trimmed fit, though
+the fit object had already been saved.
