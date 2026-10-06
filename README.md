@@ -209,11 +209,79 @@ Two rules are needed, both established by inspection and both implemented in `23
 Together these recover 83 of 84. Only *Pinguinus* is absent, correctly, since it is not a
 B10K genome.
 
-## External packages
+## Reproducing this
 
-Installed and used: `readxl`, `ape`, `phangorn`, `phytools`, `brms`, `jsonlite`,
-`clusterProfiler` 4.18.4, `fgsea` 1.36.2. Gene sets are built from `goterms.csv` directly
-(3,025 GO terms, 389 within the 10 to 500 size bounds), so no OrgDb is required and the
-annotation is identical to the previous submission.
+Scripts run from `scripts/`, in numerical order, with the working directory set there.
+Paths are relative: `../data/`, `../functions/`, `../figures/`, `../output/`.
 
-Not used: `RERconverge` (superseded, see above), `MCMCglmm` (brms serves), `ggtree`.
+Scripts 01 to 08 rebuild the alignments and rate estimates from the B10K data and take
+days. They are included for completeness and for the record of how the inputs were made.
+**Their expensive outputs are committed**, so scripts 09 onward run from this repository
+alone, with the single exception of the codon alignments.
+
+| stage | needs | typical cost |
+|---|---|---|
+| 01 to 08, alignment and rates | B10K c123 data, external tools below | days |
+| 09 to 13, per-gene tests and genome size | committed `.Rdata` only | minutes |
+| 14 to 22, traits, contrasts, screens | committed `.Rdata` only | minutes, except 19 |
+| 19, the HyphAeon screen | codon alignments, hyphaeon | 26 h |
+| 23, the MR-PMM | committed `.Rdata` only | 9.2 h per specification |
+| 24 to 26, figures and PELICAN inputs | outputs of the above | minutes |
+
+### External software
+
+Carried over from the first version of this analysis, and needed only for scripts 01 to 08.
+
+| | used by |
+|---|---|
+| MACSE v2.03 | 02, codon-aware alignment |
+| IQ-TREE v1.7 | 02, gene trees |
+| PAML | 04, dN and dS trees |
+| EraBLE | 04, branch length estimation |
+| BLASTN | 06, locus identification |
+
+### R packages
+
+`ape`, `phangorn`, `phytools`, `readxl`, `brms`, `jsonlite`, `lavaan`, `MASS`, `ggplot2`,
+`gridExtra`, `clusterProfiler` 4.18.4, `fgsea` 1.36.2. R 4.5.2.
+
+Gene sets are built from `data/goterms.csv` directly, 3,025 GO terms of which 389 fall
+within the 10 to 500 size bounds, so no OrgDb is required and the annotation matches the
+previous submission exactly.
+
+### Helper functions
+
+`functions/` holds `trimCols.R`, `trimCodons.R`, `trimLongTipBrs.R`, `rtt.cov.R`,
+`pathnode.R` and `concatenate.R`. The first two were missing from the previous repository
+although `02_align_basic_iq` sources them.
+
+## Data provenance
+
+| file | origin |
+|---|---|
+| `Table_S1.xlsx` | curated flight traits, AVONET morphometrics, AviList taxonomy |
+| `dnds_sisdifs_vol.Rdata` | script 05, sister-pair rate ratios |
+| `dnds_branches.Rdata` | script 04, per-locus per-taxon terminal branch rates |
+| `p_values_per_locus.Rdata` | script 09, 14,785 by 24 per-gene binomial p-values |
+| `Feng_Table_1.csv` | Feng et al. 2020, B10K assembly metrics |
+| `goterms.csv` | GO annotation of the chicken reference loci |
+| `dated.auk.tre` | the dated 84-taxon species tree |
+| `OUT-0003_..._greatAuk.fa` | the *Pinguinus impennis* sequence, reads mapped to razorbill |
+| `sheard_martin_traits.csv` | Sheard et al. hand-wing index and migration |
+| `locus_codes.csv`, `taxonomy_codes.csv` | locus and taxon identifier maps |
+
+**The codon alignments are not in this repository.** They are 29,914 files across roughly
+14,957 genes, each `*.fasta` with a matching `*.fasta.treefile`, and they live at
+`~/Desktop/Research/auk/postshrink_alignments`. Set `AUK_ALIGNMENTS` to point elsewhere.
+
+## Deliberately not used
+
+`RERconverge`, superseded by the in-house comparator in `20_hyphaeon_collect`, which adds
+no new null. `MCMCglmm`, since brms serves. `ggtree`. HyphAeon is installed and the full
+screen is retained, but it is not used for inference, for the reasons in `HYPHAEON.md`.
+
+## Per-site screen
+
+`hpc/` is a complete kit for running PELICAN on GenomeDK. It cannot be installed on the
+machine this analysis was developed on, so the kit targets the cluster through Apptainer.
+See `hpc/README.md`.
