@@ -76,7 +76,8 @@ the spreadsheet.
 | `23_mrpmm` | run, 9.2 h per fit | Multi-response phylogenetic mixed model. Four specifications, see below |
 | `24_fig_genomewide` | run | Figure 6, the genome-wide excess against a permutation null |
 | `25_mrpmm_compare` | run | Compares the four MR-PMM fits and labels each correlation |
-| `26_pelican_prep` | run, 3 min | Inputs for the per-site PELICAN screen. See `hpc/` |
+| `26_pelican_prep` | run, 3 min | Inputs for the per-site PELICAN screen |
+| `hpc/` | run on GenomeDK, ~720 core-hours | PELICAN per-site screen, three phenotypes. Null |
 
 ### Not carried forward
 
@@ -196,6 +197,8 @@ but which were absent from the previous repository.
 **Codon alignments and gene trees are not in the repository.** They live at
 `~/Desktop/Research/auk/postshrink_alignments` (29,914 files, about 14,957 genes, each
 `*.fasta` with a matching `*.fasta.treefile`). Set `AUK_ALIGNMENTS` to point elsewhere.
+The 14,957 alignments, without tree files, are also on GenomeDK at
+`/faststorage/project/DeiC-KU-L04/dduchene/alignments_all`.
 
 ### Matching our taxa to `Feng_Table_1.csv`
 
@@ -282,6 +285,6 @@ screen is retained, but it is not used for inference, for the reasons in `HYPHAE
 
 ## Per-site screen
 
-`hpc/` is a complete kit for running PELICAN on GenomeDK. It cannot be installed on the
-machine this analysis was developed on, so the kit targets the cluster through Apptainer.
-See `hpc/README.md`.
+`hpc/` runs PELICAN on GenomeDK through Apptainer and Slurm, for flight, migration and the
+continuous loading index. **No site and no gene reaches q < 0.10 for any phenotype.** See
+`hpc/README.md` for the method and the choices behind it, and `STATUS.md` for the numbers.

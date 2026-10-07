@@ -11,7 +11,7 @@ is being rebuilt for Molecular Biology and Evolution around a single continuous 
 predictor instead of the categorical scheme every referee attacked. Scripts 01 to 26 are
 written and run. The per-gene screens are finished, the MR-PMM has been fitted in four
 specifications and compared, and the figures are drawn. The per-site PELICAN screen has
-been run on GenomeDK for flight and migration and finds nothing at q < 0.05.
+been run on GenomeDK for flight, migration and loading and finds nothing at q < 0.10.
 
 ## Paths
 
@@ -25,6 +25,8 @@ been run on GenomeDK for flight and migration and finds nothing at q < 0.05.
 | AVONET | `~/Desktop/Research/predicts_colour/avonet/AVONET Supplementary dataset 1.xlsx`, sheet `AVONET1_BirdLife` |
 | Livezey 1988, Poole 1938 | `~/Dropbox/Research/auk/Livezey.pdf`, `Poole.pdf` |
 | Codon alignments and gene trees | `~/Desktop/Research/auk/postshrink_alignments` (not in the repo) |
+| GenomeDK copy of the alignments | `/faststorage/project/DeiC-KU-L04/dduchene/alignments_all` (no tree files) |
+| GenomeDK repo clone | `/faststorage/project/DeiC-KU-L04/dduchene/avian_flight_genomics` |
 | HyphAeon venv (Intel Mac pinned build) | scratchpad `hvenv3`; recipe in `HYPHAEON.md` |
 
 ## Decisions already taken. Do not reopen these.
@@ -130,10 +132,8 @@ the ratites. Real biology, but a Gaussian response is an approximation there. Ma
 Done and tested: `01` to `22`, including the new `20b_contrast_screen`, which is now
 the primary per-gene analysis. To write: `24_figures`.
 
-Running now: `19_hyphaeon_run.py` for all three phenotypes in parallel, 14,124 genes each,
-1000 permulations, `--resume`. At about 69% after roughly 19 hours; the rate settled to
-about 7 s per gene rather than 5.07 because three processes contend on 16 cores. Roughly
-8 more hours. Then `20`, `21`.
+`19_hyphaeon_run.py` finished for all three phenotypes, 14,124 genes each, 1000
+permulations.
 
 **The flightloss phenotype has 92 legitimate failures**, all `Insufficient foreground taxa
 (1)`. The binary flight-loss phenotype has only 7 positives across 84 taxa, so genes with
@@ -191,8 +191,9 @@ Settled empirically. Full reasoning in `HYPHAEON.md`; the short version follows.
 **The primary screen is `20b_contrast_screen`**, correlating each gene's sister-pair rate
 contrast against the contrast in the continuous flight index across 42 pairs. Sister pairs
 are independent contrasts by construction, so no phylogenetic model, no lambda and no
-permulation null enter, and there is nothing to misspecify. Median p is 0.496 to 0.497,
-and it finds 6 genes on dS and 1 on omega at q < 0.05. Script 17 computed power for
+permulation null enter, and there is nothing to misspecify. Median p is 0.496 to 0.497.
+After the factor-indexing fix it finds one gene at q < 0.05 (GALGAL_R08885, dN against
+the index); the six dS and one omega genes once reported here predate that fix. Script 17 computed power for
 exactly this test.
 
 **Only two of nine rate-by-phenotype screens are usable**, and both are the continuous
@@ -308,9 +309,9 @@ clutch size and generation length, latitude, and pipeline-wide multiple-testing 
 
 ## Next action
 
-Wait for the screen, then run `20_hyphaeon_collect` and `21_gsea`. Check whether the
-revised `23_mrpmm` converged. Write `24_figures` last, once the figures it assembles exist.
-
+Every planned analysis has run: the per-gene screens, the MR-PMM in four specifications,
+and the per-site PELICAN screen on GenomeDK. What remains is writing, plus the unscheduled
+items above and open question 4, the great auk damage and contamination check.
 
 ## Added 6 October 2026
 

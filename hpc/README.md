@@ -1,98 +1,84 @@
-# Running PELICAN on GenomeDK
+# PELICAN on GenomeDK
 
-PELICAN tests, per protein site, whether amino acid preferences differ between foreground
-and background lineages. It is the one resolution our analyses have not examined: a few
-sites under strong selection in a few genes move neither genome-wide nor gene-level omega,
-so our null on omega says nothing about them.
+PELICAN tests, per protein site, whether amino acid preferences differ between conditions
+or covary with a continuous trait. It is the one resolution the rest of the analysis does
+not examine: a few sites under strong selection in a few genes move neither genome-wide nor
+gene-level omega.
 
-**Run this on GenomeDK, not locally.** The local Intel Mac cannot install it. Homebrew
-refuses to build opam because the Command Line Tools predate Xcode 26.3, and Docker
-Desktop 20.10.6 starts its backend but never opens a socket. Both are fixable only with
-`sudo` and a system update. GenomeDK needs neither, because Apptainer pulls the authors'
-prebuilt image.
+**Result: null for all three phenotypes.** No site and no gene reaches q < 0.10. The table
+and the interpretation are in `STATUS.md`; per-gene tables are in `results/summary/`.
 
-## Why the cluster wins on more than convenience
-
-| | this Mac | GenomeDK |
-|---|---|---|
-| install | blocked, needs a system update | `apptainer pull`, about two minutes |
-| cores | 8 physical | a Slurm array across many nodes |
-| 9,890 genes | days, single machine | hours, embarrassingly parallel |
-
-The work is embarrassingly parallel. Every gene is independent, so a job array over gene
-chunks scales almost linearly and there is nothing to coordinate.
-
-## The one unknown, which step 00 resolves
-
-Alignments carry a median of 77 of our 84 taxa, and **7,087 of the 9,890 eligible genes
-have a taxon set no other gene shares**. So grouping genes by taxon set is useless, and
-everything depends on one question:
-
-> Does PELICAN accept a tree carrying taxa that are absent from the alignment?
-
-- **If yes**, run in BATCH mode. One invocation per chunk of genes, one shared annotated
-  84-tip tree, `--alignment` pointed at a directory. Fastest.
-- **If no**, run in PERGENE mode. Prune the tree to each gene's taxa, annotate, scan one
-  gene at a time. PELICAN is a compiled OCaml binary, so process startup is milliseconds
-  rather than the 5.3 seconds that made per-gene invocation ruinous for HyphAeon. The cost
-  is real but tolerable.
-
-`00_setup.sh` answers the question and writes `MODE` to `pelican_mode.txt`. Do not skip it.
+Every step is a Slurm job on the `DeiC-KU-L04` account. Nothing runs on the login node.
 
 ## Steps
 
 ```bash
-# on the GenomeDK frontend, in your project directory
-bash 00_setup.sh                      # pull image, smoke test, decide MODE, time one gene
-sbatch 01_run_array.sh                # the screen itself, reads MODE
-Rscript 02_collect.R                  # gather, FDR-correct, report
+cd hpc
+sbatch 00_setup.sh            # pull images, install ape, annotate flight tree, smoke tests
+sbatch 00b_calibration.sh     # optional: test calibration under permuted labels
+# loading only: write work/tree_loading.nhx (Brownian ancestral values)
+srun --account=DeiC-KU-L04 --mem=2G --time=0:10:00 bash -c \
+  'source pelican_mode.txt; $RSCRIPT_CMD 01c_annotate_continuous.R loading'
+sbatch --export=ALL,PHENO=flight 01_run_array.sh
+sbatch --export=ALL,PHENO=migration,GENES=inputs/genes_min20.txt 01_run_array.sh
+sbatch --export=ALL,PHENO=loading,GENES=inputs/genes_min20.txt   01_run_array.sh
+sbatch 02_collect.sh flight   # likewise migration, loading
 ```
 
-`00_setup.sh` prints a measured seconds-per-gene. Multiply by 9,890, divide by the array
-width, and set `--time` in `01_run_array.sh` accordingly before submitting.
+The migration tree (`work/tree_migration.nhx`) is annotated like the flight tree, with
+`pelican tree-annotation parsimony` on `inputs/tree_subst.nwk`.
 
-## Getting it onto the cluster
+## Inputs
 
-Clone the repository, then ship the alignments separately. `hpc/inputs/` is tracked, so
-the clone already carries the relabelled tree, the three phenotype tables, the eligible
-gene list and its manifest. Only the codon alignments need transferring, because they have
-never been in the repository and should not be.
+| file | what |
+|---|---|
+| `inputs/tree_codes.nwk` | dated 84-taxon tree, Myr, six-letter codes. Used only for ancestral loading |
+| `inputs/tree_subst.nwk` | the same tree times 0.001, substitutions per site. **What PELICAN reads** |
+| `inputs/pheno_{flight,migration,loading}.tsv` | header `species<TAB>trait` |
+| `inputs/eligible_genes.txt` | 9,890 genes, >= 70 taxa and >= 12 of 15 reduced-flight tips. Flight |
+| `inputs/genes_min20.txt` | 14,124 genes, >= 20 taxa, the script 18 rule. Loading and migration |
+| `alignments` | symlink to `dduchene/alignments_all`, all 14,957 `*_NT.fasta` |
 
-```bash
-# here
-bash hpc/make_transfer.sh                 # 113 Mb tarball of the 9,890 eligible alignments
+Images live in `/faststorage/project/DeiC-KU-L04/shared_software/containers/`: PELICAN 1.0.8
+and rocker R 4.4.1, with `ape` in `work/Rlib`. `pelican_mode.txt`, written by setup, holds
+the two container commands every script sources.
 
-# on the GenomeDK frontend
-git clone <repo url> avian_flight_genomics
-cd avian_flight_genomics/hpc
-rsync -avP <this mac>:/tmp/auk_alignments.tar.gz .
-mkdir -p alignments && tar -xzf auk_alignments.tar.gz -C alignments
-bash 00_setup.sh
-```
+## Choices, and the evidence for each
 
-Cloning rather than shipping a self-contained payload means the cluster copy stays under
-version control. Fixes made there come back by `git pull` instead of by hand, which
-matters because the mode question in the next section may well force a change to
-`01_run_array.sh` after the smoke test.
+- **No pre-filter.** PELICAN's multinomial and ANOVA filters pass only sites already at
+  p < 0.1 on a label-dependent screen, so BH over the tested sites is invalid. On flight the
+  filter manufactured 22,911 sites at q < 0.10 that vanish without it. `PREFILTER=0.1`
+  restores it if speed ever matters more than valid q-values.
+- **Invariant sites dropped before BH** (`02_collect.R`). Invariance does not depend on the
+  labels, so this is valid independent filtering and only removes sites that cannot be
+  significant.
+- **Branch lengths in substitutions.** On the dated tree, permuted labels put 1.5% of sites
+  at p < 1e-6. Rescaled by 0.001 the test behaves, identically from x0.01 to x0.0003.
+- **Loading's internal nodes** are Brownian-motion ML ancestral values from the dated tree,
+  and branches take the mean of their ends (`--branch-trait average`). Lambda for loading is
+  0.85, but a lambda-scaled reconstruction correlates with these at r = 0.999 (`checks/`).
+- **BATCH mode.** PELICAN accepts the 84-tip tree for a gene missing taxa, so one shared tree
+  serves every gene. `01b_prune_trees.R` and the PERGENE branch are unused.
 
-## Phenotypes, in the order worth running
+## Silent traps in PELICAN 1.0.8
 
-1. **flight**, discrete, 15 tips across 14 pairs. Reduced flight ability, which is flight
-   loss plus the curated limited-flight taxa. Flight loss alone is 7 taxa, too few to
-   estimate a foreground profile.
-2. **loading**, continuous. PELICAN 1.0.8 has `scan continuous`, so the index needs no
-   binarisation and the categorical predictor the referees attacked stays buried. Costlier
-   than the discrete test, and the authors recommend the `--anova-filter` pre-filter.
-3. **migration**, discrete, 29 tips. Best powered and worst motivated: our pair-level
-   result moves dN and dS together and leaves omega flat, which is a mutation-rate
-   signature rather than the selection these methods detect.
+Each of these produced plausible output or a zero exit code, not an error.
 
-## Caution on the great auk
+- Lowercase bases are read as missing. Every site becomes "No observation" and the run
+  exits 0. `01_run_array.sh` uppercases each alignment into scratch.
+- The annotation header must be `trait`, though the help text says `traits`.
+- The subcommand is `tree-annotation`, not `annotate-tree`.
+- It will not overwrite an existing output file, so a stale annotated tree survives.
 
-*Pinguinus impennis* appears in only 40% of genes, and its assembly is reads mapped to the
-razorbill, which is its own sister in this design. At the per-site level that is reference
-bias pulling the pair together. Treat any hit resting on PINIMP-ALCTOR as suspect, and
-check whether it survives dropping that pair.
+## Cost
+
+Discrete scan about 2.3 s per gene on 8 cores, continuous about 40 s. The full set of five
+arrays, setup and checks came to about 720 core-hours.
+
+## Storage
+
+Raw per-chunk output is `results/<phenotype>/*/all_sites.tsv(.gz)`. PELICAN's `store.pag`
+resume database is not needed once a run has finished.
 
 ## References
 

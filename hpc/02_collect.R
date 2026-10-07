@@ -20,7 +20,7 @@ ph <- commandArgs(trailingOnly = TRUE)[1]; if (is.na(ph)) ph <- "flight"
 root <- file.path("results", ph)
 stopifnot(dir.exists(root))
 
-f <- list.files(root, pattern = "^all_sites\\.tsv$", recursive = TRUE, full.names = TRUE)
+f <- list.files(root, pattern = "^all_sites\\.tsv(\\.gz)?$", recursive = TRUE, full.names = TRUE)
 cat("phenotype:", ph, "| all_sites.tsv files found:", length(f), "\n")
 stopifnot(length(f) > 0)
 
