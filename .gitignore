@@ -11,3 +11,11 @@ hyphaeon_out/
 .Rhistory
 .RData
 .Rproj.user/
+
+# GenomeDK PELICAN run (regenerable or too large)
+hpc/alignments
+hpc/work/
+hpc/results/
+hpc/logs/
+hpc/pelican_mode.txt
+hpc/inputs/pruned_trees/

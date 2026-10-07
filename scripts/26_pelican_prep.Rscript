@@ -66,7 +66,7 @@ tr$reduced <- ifelse(tr$ability %in% c("lost", "near lost", "limited"), "reduced
 tr$migr    <- ifelse(tr$migratory == 1, "migratory", "sedentary")
 
 write_pheno <- function(values, file) {
-  d <- data.frame(species = tr$code, traits = values, stringsAsFactors = FALSE)
+  d <- data.frame(species = tr$code, trait = values, stringsAsFactors = FALSE)
   write.table(d, file.path(KIT, file), sep = "\t", quote = FALSE, row.names = FALSE)
   d
 }

@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH --account=CHANGE_ME
+#SBATCH --account=DeiC-KU-L04
 #SBATCH --job-name=pelican
-#SBATCH --array=1-100
+#SBATCH --array=1-50
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=16g
-#SBATCH --time=12:00:00
+#SBATCH --mem=16G
+#SBATCH --time=02:00:00
 #SBATCH --output=logs/pelican_%A_%a.out
 #
 # The PELICAN screen, as a Slurm job array over gene chunks.
@@ -19,12 +19,13 @@
 #     sbatch --export=ALL,PHENO=flight 01_run_array.sh
 #     sbatch --export=ALL,PHENO=loading 01_run_array.sh      # continuous, costlier
 set -uo pipefail
+cd "${SLURM_SUBMIT_DIR:-.}"
 
 PHENO=${PHENO:-flight}
 source pelican_mode.txt                 # MODE, SECONDS_PER_GENE, PELICAN_CMD
 PEL="$PELICAN_CMD"
 GENES=inputs/eligible_genes.txt         # one alignment basename per line
-NTASK=${SLURM_ARRAY_TASK_COUNT:-100}
+NTASK=${SLURM_ARRAY_TASK_COUNT:-50}
 TASK=${SLURM_ARRAY_TASK_ID:-1}
 OUT=results/${PHENO}/chunk_$(printf '%03d' "$TASK")
 mkdir -p "$OUT" logs
@@ -51,10 +52,12 @@ trap 'rm -rf "$SCRATCH"' EXIT
 
 if [[ $MODE == BATCH ]]; then
   # One shared annotated tree, one invocation over a directory of alignments. PELICAN
-  # requires that directory to contain ONLY alignments, hence the scratch copy.
+  # requires that directory to contain ONLY alignments, hence the scratch copy. The copy is
+  # uppercased because PELICAN silently reads lowercase bases as missing data, which turns
+  # every site into "No observation" and still exits 0.
   mkdir -p "$SCRATCH/aln"
   sed -n "${FROM},${TO}p" "$GENES" | while read -r g; do
-    ln -sf "$PWD/alignments/$g" "$SCRATCH/aln/$g"
+    awk '/^>/{print; next}{print toupper($0)}' "alignments/$g" > "$SCRATCH/aln/$g"
   done
   $PEL scan "$SUB" \
     --tree "work/tree_${PHENO}.nhx" --alignment "$SCRATCH/aln" \
@@ -65,11 +68,11 @@ else
   # PERGENE: each gene carries its own taxon set, so each needs its own pruned, annotated
   # tree. PELICAN is a compiled binary, so the extra process per gene costs milliseconds.
   n=0; fail=0
-  sed -n "${FROM},${TO}p" "$GENES" | while read -r g; do
+  while read -r g; do
     base=${g%%.*}
     t=inputs/pruned_trees/${base}.nwk
     [[ -f $t ]] || { echo "SKIP $base, no pruned tree"; continue; }
-    $PEL annotate-tree parsimony --tree "$t" \
+    $PEL tree-annotation parsimony --tree "$t" \
          --annotation "inputs/pheno_${PHENO}.tsv" --clip \
          -o "$SCRATCH/${base}.nhx" >/dev/null 2>&1 \
       || { echo "SKIP $base, annotate failed"; fail=$((fail+1)); continue; }
@@ -79,6 +82,6 @@ else
       || { echo "SKIP $base, scan failed"; fail=$((fail+1)); continue; }
     n=$((n+1))
     (( n % 100 == 0 )) && echo "  ... $n genes done"
-  done
+  done < <(sed -n "${FROM},${TO}p" "$GENES")
   echo "task $TASK finished: $n genes, $fail failures"
 fi

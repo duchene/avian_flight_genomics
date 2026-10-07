@@ -1,7 +1,7 @@
 # STATUS
 
 Handoff note. Written for an assistant session resuming this work cold. Last updated
-6 October 2026.
+7 October 2026.
 
 ## Where things stand in one paragraph
 
@@ -10,8 +10,8 @@ and Evolution and then by Nature Communications, six referee reports in total. T
 is being rebuilt for Molecular Biology and Evolution around a single continuous flight
 predictor instead of the categorical scheme every referee attacked. Scripts 01 to 26 are
 written and run. The per-gene screens are finished, the MR-PMM has been fitted in four
-specifications and compared, and the figures are drawn. The open work is a per-site PELICAN
-screen, which cannot run on this Mac and is packaged for GenomeDK in `hpc/`.
+specifications and compared, and the figures are drawn. The per-site PELICAN screen has
+been run on GenomeDK for flight and migration and finds nothing at q < 0.05.
 
 ## Paths
 
@@ -328,28 +328,47 @@ case for it worse rather than better, which is measured in the header of script 
 a residual standard deviation or sits on ln dS. The 21 reported correlations are clean in
 all four fits.
 
-### PELICAN, packaged but not run
+### PELICAN, run on GenomeDK, null
 
-The one resolution nothing here has examined is the individual site. A few sites under
-strong selection move neither genome-wide nor gene-level omega, so our null on omega says
-nothing about them.
+The one resolution nothing else here examined is the individual site. A few sites under
+strong selection move neither genome-wide nor gene-level omega, so our null on omega said
+nothing about them. PELICAN now says there are none we can detect.
 
-**It cannot be installed on this Mac.** Homebrew refuses to build opam because the Command
-Line Tools predate Xcode 26.3, and Docker Desktop 20.10.6 starts its backend but never
-opens a socket. Both need `sudo` and a system update. Do not spend another hour on this.
+**Result, 7 October 2026, all 9,890 eligible genes, 4.64M sites.** Discrete scan with the
+multinomial pre-filter at 0.1. Per-gene tables are in `hpc/results/summary/`.
 
-`hpc/` is a complete GenomeDK kit: Apptainer pull, two smoke tests, a Slurm array and a
-collector. `hpc/inputs/` is tracked, so a clone carries everything except the alignments,
-which `hpc/make_transfer.sh` packs into a 113 Mb tarball.
+| | flight (15 reduced tips) | migration (29 tips) |
+|---|---|---|
+| sites tested in full after pre-filter | 47,689 | 53,170 |
+| sites at BH q < 0.05 | 0 | 0 |
+| genes at q < 0.10 (Sidak within gene, BH across) | 0, best q 0.104 | 0, best q 0.172 |
 
-**The unresolved question is in `hpc/00_setup.sh`.** 7,087 of the 9,890 eligible genes have
-a taxon set no other gene shares, so if PELICAN insists that tree and alignment agree,
-batching is impossible and every gene needs its own pruned tree. The smoke test decides it
-and writes `pelican_mode.txt`. Do not guess, and do not skip it.
+Flight shows 22,911 sites at q < 0.10 and none at q < 0.05. That block is the pre-filter,
+not signal: only sites already at multinomial p < 0.1 are tested, so tested p-values pile
+up low and BH hands a large block the same q just under 0.10. For the same reason the
+"median 0.5 expected" calibration line in `02_collect.R` does not apply to filtered output.
 
-PELICAN 1.0.8 has `scan continuous`, so the loading index needs no binarisation. Run order:
-flight (discrete, 15 tips), then loading (continuous, costlier), then migration (29 tips,
-best powered and worst motivated, since our result there is a mutation-rate signature).
+**Loading (continuous) and a genome-wide permuted-label null were deliberately not run.**
+
+**Traps found on the way, each silent. Do not undo the fixes.**
+- PELICAN reads lowercase bases as missing. Our alignments are lowercase, so every site was
+  "No observation" while the run exited 0. `01_run_array.sh` uppercases into scratch.
+- Branch lengths must be substitutions per site. On the dated tree (Myr) the test is badly
+  inflated: permuted labels gave 1.5% of sites at p < 1e-6. Rescaled by 0.001 to
+  `hpc/inputs/tree_subst.nwk` it behaves, and results are identical from x0.01 to x0.0003
+  (`hpc/00b_calibration.sh`). The factor is a judgement, not an estimate; it gives
+  root-to-tip about 0.1 substitutions per site.
+- The annotation header must be `species<TAB>trait`, although the help text says `traits`.
+- The subcommand is `tree-annotation`, not `annotate-tree`, and it will not overwrite an
+  existing output, so a stale annotated tree survives silently.
+- PELICAN accepts an 84-tip tree for a gene missing taxa, so BATCH mode is used and
+  `01b_prune_trees.R` is not needed.
+
+**On GenomeDK** (project `DeiC-KU-L04`, repo at
+`/faststorage/project/DeiC-KU-L04/dduchene/avian_flight_genomics`): images are in
+`/faststorage/project/DeiC-KU-L04/shared_software/containers/`, alignments in
+`dduchene/alignments` linked as `hpc/alignments`. Every step is an `sbatch` script;
+nothing runs on the login node.
 
 ### Trap recorded
 
