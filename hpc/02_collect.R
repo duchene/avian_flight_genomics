@@ -36,8 +36,12 @@ if ("tag" %in% names(d)) { cat("\nsite status tags:\n"); print(table(d$tag, useN
 # are sites the screen declined to test, so they leave the denominator rather than being
 # imputed. The count is reported because it defines what the correction is over.
 d$aagtr_pval <- suppressWarnings(as.numeric(d$aagtr_pval))
-tested <- d[is.finite(d$aagtr_pval), ]
-cat("\nsites tested in full:", nrow(tested), "of", nrow(d),
+# Invariant sites (one amino acid) cannot be significant and only dilute the correction.
+# Dropping them keeps BH valid because invariance does not depend on the trait labels,
+# unlike PELICAN's own pre-filters, which select on the labels and so bias BH downwards.
+cat("invariant sites dropped (naa <= 1):", sum(d$naa <= 1, na.rm = TRUE), "\n")
+tested <- d[is.finite(d$aagtr_pval) & d$naa >= 2, ]
+cat("\nvariable sites tested in full:", nrow(tested), "of", nrow(d),
     sprintf(" (%.1f%%)\n", 100 * nrow(tested) / nrow(d)))
 
 # ---- per-site ----

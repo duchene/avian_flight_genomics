@@ -328,27 +328,50 @@ case for it worse rather than better, which is measured in the header of script 
 a residual standard deviation or sits on ln dS. The 21 reported correlations are clean in
 all four fits.
 
-### PELICAN, run on GenomeDK, null
+### PELICAN, run on GenomeDK, null for all three phenotypes
 
 The one resolution nothing else here examined is the individual site. A few sites under
 strong selection move neither genome-wide nor gene-level omega, so our null on omega said
-nothing about them. PELICAN now says there are none we can detect.
+nothing about them. PELICAN finds none we can detect, at q < 0.10, for any phenotype.
 
-**Result, 7 October 2026, all 9,890 eligible genes, 4.64M sites.** Discrete scan with the
-multinomial pre-filter at 0.1. Per-gene tables are in `hpc/results/summary/`.
+**Result, 7 October 2026.** No pre-filter; invariant sites (one amino acid) dropped before
+BH, which is valid because invariance does not depend on the labels. Per-gene tables are in
+`hpc/results/summary/pelican_<phenotype>_per_gene.csv`.
 
-| | flight (15 reduced tips) | migration (29 tips) |
-|---|---|---|
-| sites tested in full after pre-filter | 47,689 | 53,170 |
-| sites at BH q < 0.05 | 0 | 0 |
-| genes at q < 0.10 (Sidak within gene, BH across) | 0, best q 0.104 | 0, best q 0.172 |
+| | flight (15 reduced tips) | loading (continuous) | migration (29 tips) |
+|---|---|---|---|
+| gene set | 9,890 eligible | 14,124 (>= 20 taxa) | 14,124 (>= 20 taxa) |
+| variable sites tested | 1.90M | 2.79M | 2.79M |
+| sites at BH q < 0.10 | 0 | 0 | 0 |
+| genes at q < 0.10 (Sidak within, BH across) | 0 | 0, best q 0.129 | 0 |
+| smallest site p | 1.2e-5 | 2.5e-7 | 8.8e-6 |
+| median p, fraction < 0.05 | 0.57, 0.034 | 0.45, 0.036 | 0.35, 0.024 |
 
-Flight shows 22,911 sites at q < 0.10 and none at q < 0.05. That block is the pre-filter,
-not signal: only sites already at multinomial p < 0.1 are tested, so tested p-values pile
-up low and BH hands a large block the same q just under 0.10. For the same reason the
-"median 0.5 expected" calibration line in `02_collect.R` does not apply to filtered output.
+The p-values are calibrated or slightly conservative, so the null is not a broken test.
 
-**Loading (continuous) and a genome-wide permuted-label null were deliberately not run.**
+**Gene sets.** Flight keeps the script 26 rule (>= 70 taxa and >= 12 of the 15 reduced
+tips), since a foreground profile needs foreground taxa. Loading and migration use the
+script 18 rule, >= 20 taxa, because every taxon is informative for them. All 14,957
+alignments are on GenomeDK in `dduchene/alignments_all`; `hpc/alignments` links there.
+
+**The one near miss.** Loading, GALGAL_R08348 site 64, p 2.5e-7, gene q 0.129. Asn in most
+low-loading taxa, Ser in nearly all high-loading ones, but the Asn taxa are largely
+passerines and their allies, so it reads as one clade-level change. Not driven by the great
+auk (PINIMP and ALCTOR are both Ser). Not significant; mention at most as the top candidate.
+
+**Superseded first pass.** Flight and migration were first run with PELICAN's multinomial
+pre-filter, which tests only sites already at p < 0.1 on a label-dependent screen. BH over
+those is invalid, and it produced 22,911 flight "sites at q < 0.10" that vanish without the
+filter. Those outputs are in `hpc/results/*_prefilter/`. Do not report them.
+
+**Loading's branch values.** `scan continuous` needs a trait at every node. Internal nodes
+are Brownian-motion ML ancestral values fitted on the dated tree
+(`hpc/01c_annotate_continuous.R`), written onto the substitution tree, and each branch takes
+the mean of its two ends (`--branch-trait average`). Loading's Pagel's lambda is 0.85
+(differs from 0 at p 1e-6 and from 1 at p 3e-6), but a lambda-scaled reconstruction gives
+branch values correlated with the Brownian ones at r = 0.999, max difference 0.13
+(`hpc/checks/`). Under permuted loading the continuous test gave 2.4% of p < 0.05 on 20
+genes, so it is not inflated.
 
 **Traps found on the way, each silent. Do not undo the fixes.**
 - PELICAN reads lowercase bases as missing. Our alignments are lowercase, so every site was

@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH --account=DeiC-KU-L04
 #SBATCH --job-name=pelican
-#SBATCH --array=1-50
+#SBATCH --array=1-100
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=16G
-#SBATCH --time=02:00:00
+#SBATCH --time=04:00:00
 #SBATCH --output=logs/pelican_%A_%a.out
 #
 # The PELICAN screen, as a Slurm job array over gene chunks.
@@ -17,25 +17,31 @@
 #
 # Phenotype is chosen with PHENO, which defaults to flight:
 #     sbatch --export=ALL,PHENO=flight 01_run_array.sh
-#     sbatch --export=ALL,PHENO=loading 01_run_array.sh      # continuous, costlier
+#     sbatch --export=ALL,PHENO=loading 01_run_array.sh      # continuous, ~40 s/gene on 8 cores
+# loading needs work/tree_loading.nhx from 01c_annotate_continuous.R first.
 set -uo pipefail
 cd "${SLURM_SUBMIT_DIR:-.}"
 
 PHENO=${PHENO:-flight}
 source pelican_mode.txt                 # MODE, SECONDS_PER_GENE, PELICAN_CMD
 PEL="$PELICAN_CMD"
-GENES=inputs/eligible_genes.txt         # one alignment basename per line
-NTASK=${SLURM_ARRAY_TASK_COUNT:-50}
+# One alignment basename per line. Default is the flight-eligible set (>=70 taxa, >=12 of
+# 15 reduced-flight tips); loading and migration use genes_min20.txt, the >=20-taxa rule of
+# script 18. TAG names the output chunks so extra runs can sit beside earlier ones.
+GENES=${GENES:-inputs/eligible_genes.txt}
+NTASK=${SLURM_ARRAY_TASK_COUNT:-100}
 TASK=${SLURM_ARRAY_TASK_ID:-1}
-OUT=results/${PHENO}/chunk_$(printf '%03d' "$TASK")
+OUT=results/${PHENO}/${TAG:-chunk}_$(printf '%03d' "$TASK")
 mkdir -p "$OUT" logs
 
-# The continuous test is substantially more expensive, so the authors recommend screening
-# with a cheap pre-filter first and fitting the full model only at surviving sites.
+# No pre-filter by default. The filters (multinomial for discrete, ANOVA for continuous)
+# save time, but only sites passing p < 0.1 get the full test, so the tested p-values are
+# selected and Benjamini-Hochberg over them is not valid. Set PREFILTER=0.1 to use them.
+PREFILTER=${PREFILTER:-}
 if [[ $PHENO == loading ]]; then
-  SUB="continuous"; FILTER="--anova-filter 0.1"
+  SUB="continuous"; FILTER="--branch-trait average${PREFILTER:+ --anova-filter $PREFILTER}"
 else
-  SUB="discrete";   FILTER="--multinomial-filter 0.1"
+  SUB="discrete";   FILTER="${PREFILTER:+--multinomial-filter $PREFILTER}"
 fi
 
 # Contiguous slice of the gene list for this task.
