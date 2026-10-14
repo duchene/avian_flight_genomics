@@ -84,6 +84,13 @@ published finding**: dN and dS are elevated in the migratory sister (p_adj 0.007
 0.015, positive estimates) while omega is unaffected (0.24, 0.18). The buggy version had
 claimed the opposite, a significant omega effect and null dN and dS.
 
+Migration coding sensitivity (section 4b). migration_pair scores 21 pairs: the 15 "to
+migratory" pairs plus six where a volant migrant faces a flightless or weak-flying sister
+(APTFOR-PELURI, PINIMP-ALCTOR, NANHAR-PHACAR, RHYJUB-PHALEP, MESUNI-PTEGUT, GALGAL-COTJAP).
+Dropping those six strengthens the effect (dS 0.227, dN 0.270, p_adj < 0.001), as does
+comparing only "to migratory" against "minimal" (dS 0.253, dN 0.298); adding flight loss
+as a covariate changes nothing. Omega stays null throughout. Reported in the manuscript.
+
 **20b, contrast screen** (also corrected). One gene passes q < 0.05, GALGAL_R08885 on
 dN against the flight index (n = 36, r = -0.695, q = 0.017). The seven genes reported
 before the fix were artefacts.

@@ -19,6 +19,7 @@
 # In:  ../output/traits_contrasts.csv, ../output/traits_per_taxon.csv,
 #      ../data/dnds_sisdifs_vol.Rdata
 # Out: ../output/rate_contrasts.csv, ../output/rate_contrast_models.csv,
+#      ../output/rate_contrast_migration_sensitivity.csv,
 #      ../figures/Fig2_rate_contrasts.pdf
 
 contr <- read.csv("../output/traits_contrasts.csv", stringsAsFactors = FALSE)
@@ -130,6 +131,49 @@ sens <- do.call(rbind, lapply(responses, function(y) {
 }))
 cat("\nSensitivity, ln(wing / mass^(1/3)) in place of the loading index:\n\n")
 print(format(sens, digits = 3), row.names = FALSE)
+
+
+# ---- 4b. Sensitivity on the migration coding ----
+#
+# migration_pair follows the Winged migration column, so it scores 21 pairs: the 15 in the
+# "to migratory" category plus six in which a volant migrant is paired with a flightless
+# or weak-flying sister (five toward flight loss, one toward limited flight). In those six
+# the migration difference most likely arose by loss alongside flight, not by gain, and it
+# coincides with flight loss. Each variant below refits the primary model and reports the
+# migration term, BH-adjusted across the six responses as above.
+#
+#   all_21          primary model, for reference
+#   plus_flightloss flight loss added as a covariate
+#   drop_overlap    the six overlapping pairs removed (36 pairs, 15 migration)
+#   mig_vs_minimal  only the 15 "to migratory" and 15 "minimal" pairs
+
+dat$overlap <- dat$migration_pair == 1 & dat$habit != "to migratory"
+cat("\nmigration pairs outside the 'to migratory' category:",
+    paste(dat$pair_id[dat$overlap], collapse = ", "), "\n")
+stopifnot(sum(dat$migration_pair) == 21, sum(dat$overlap) == 6)
+
+variants <- list(
+  all_21          = list(d = dat, f = "~ d_loading + migration_pair + d_logmass"),
+  plus_flightloss = list(d = dat, f = "~ d_loading + migration_pair + flight_loss_pair + d_logmass"),
+  drop_overlap    = list(d = dat[!dat$overlap, ], f = "~ d_loading + migration_pair + d_logmass"),
+  mig_vs_minimal  = list(d = dat[dat$habit %in% c("to migratory", "minimal"), ],
+                         f = "~ d_loading + migration_pair + d_logmass"))
+
+mig_sens <- do.call(rbind, lapply(names(variants), function(v) {
+  out <- do.call(rbind, lapply(responses, function(y) {
+    m  <- lm(as.formula(paste(y, variants[[v]]$f)), data = variants[[v]]$d)
+    cf <- summary(m)$coefficients["migration_pair", ]
+    ci <- confint(m)["migration_pair", ]
+    data.frame(variant = v, response = y, n_pairs = nobs(m),
+               n_migration = sum(variants[[v]]$d$migration_pair),
+               estimate = cf[1], lower = ci[1], upper = ci[2], p = cf[4], row.names = NULL)
+  }))
+  out$p_adj <- p.adjust(out$p, method = "BH")
+  out
+}))
+write.csv(mig_sens, "../output/rate_contrast_migration_sensitivity.csv", row.names = FALSE)
+cat("\nSensitivity, migration term under alternative codings:\n\n")
+print(format(mig_sens, digits = 3), row.names = FALSE)
 
 
 # ---- 5. Figure ----
