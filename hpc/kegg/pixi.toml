@@ -1,0 +1,11 @@
+[workspace]
+name = "afg-kegg"
+channels = ["conda-forge", "bioconda"]
+platforms = ["linux-64"]
+
+[dependencies]
+diamond = "*"
+seqkit = "*"
+curl = "*"
+r-base = "4.4.*"
+bioconductor-clusterprofiler = "*"

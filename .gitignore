@@ -19,3 +19,6 @@ hpc/results/
 hpc/logs/
 hpc/pelican_mode.txt
 hpc/inputs/pruned_trees/
+
+# pixi environments
+.pixi/

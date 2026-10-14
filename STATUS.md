@@ -1,7 +1,7 @@
 # STATUS
 
 Handoff note. Written for an assistant session resuming this work cold. Last updated
-7 October 2026.
+14 October 2026.
 
 ## Where things stand in one paragraph
 
@@ -399,3 +399,38 @@ nothing runs on the login node.
 **Do not edit a script while Rscript is executing it.** R parses lazily, so an edit lands
 mid-parse and kills the run. This cost the post-fit reporting of the trimmed fit, though
 the fit object had already been saved.
+
+## Added 14 October 2026
+
+### KEGG gene sets rebuilt, GSEA null for GO and KEGG
+
+The previous submission's KEGG annotation came from the KOBAS web server. It is replaced by
+`scripts/21a_kegg_sets.Rscript`, run on GenomeDK through `hpc/kegg/21a_kegg_sets.sh`: the
+chicken sequence of each alignment is translated and searched with DIAMOND against the
+GRCg7b RefSeq proteins, and the best hit's GeneID is the KEGG `gga` identifier.
+Out: `data/galgal_refseq_map.csv`, `data/kegg_sets.csv` (both tracked, so the sets are
+reproducible without rerunning DIAMOND).
+
+14,797 loci searched, 13,064 (88.3%) mapped, 5,385 in at least one of 197 `gga` pathways,
+177 within the 10 to 500 size bounds.
+
+`21_gsea.Rscript` now takes `GSEA_SETS=GO|KEGG` (KEGG outputs carry `_kegg`). On the primary
+ranking (contrast screen, dS and omega against loading) nothing passes q < 0.05:
+best GO set plasma membrane, q 0.101; best KEGG pathways all at q 0.633.
+
+**Trap.** pixi skips post-link scripts by default, and Bioconductor data packages
+(GenomeInfoDbData, GO.db) fetch their data there, so clusterProfiler fails to load with
+"there is no package called 'GenomeInfoDbData'". Both `hpc/kegg` job scripts set
+`run-post-link-scripts insecure` locally before installing.
+
+**On GenomeDK the comparator and HyphAeon rankings are absent** (`rer_comparator.csv`,
+`per_gene_statistics.csv` live on the Mac), so a GO run there drops them from
+`figures/Fig4_gsea.pdf`. The committed Fig4 was drawn with them; do not commit a
+cluster-drawn Fig4 unless those files have been copied over.
+
+### MR-PMM credible intervals, and one correction to the manuscript
+
+The fits and harvest tables are copied to `output/` on GenomeDK. The manuscript claimed no
+credible correlation of either flight axis with any genomic trait "in any specification".
+That is not quite true: GC content with the loading index is credible in the trimmed fit
+only (r 0.22, 95% CI 0.01 to 0.41; full data 0.13, -0.10 to 0.35). The text now says so.

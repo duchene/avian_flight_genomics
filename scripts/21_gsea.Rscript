@@ -34,15 +34,22 @@
 #
 # Reported at q < 0.05. A null result is reported as a null result.
 #
+# GENE SETS. GSEA_SETS=GO (default) or GSEA_SETS=KEGG. KEGG pathways, as in the previous
+# submission, come from ../data/kegg_sets.csv built by 21a_kegg_sets. Outputs for KEGG
+# carry the suffix _kegg.
+#
 # Requires: clusterProfiler (Bioconductor). fgsea alone would also serve.
-# In:  ../output/per_gene_statistics.csv, ../data/goterms.csv
-# Out: ../output/gsea_results.csv, ../figures/Fig4_gsea.pdf
+# In:  ../output/contrast_screen.csv, and where present ../output/per_gene_statistics.csv
+#      and ../output/rer_comparator.csv; ../data/goterms.csv or ../data/kegg_sets.csv
+# Out: ../output/gsea_results{,_kegg}.csv, ../figures/Fig4_gsea{,_kegg}.pdf
 
 suppressMessages(library(clusterProfiler))
 
 MIN_SET <- 10      # sets smaller than this are unstable
 MAX_SET <- 500     # sets larger than this are too vague to interpret
 QCUT    <- 0.05
+SETS    <- toupper(Sys.getenv("GSEA_SETS", "GO"))
+SUF     <- if (SETS == "KEGG") "_kegg" else ""
 
 dir.create("../output", showWarnings = FALSE)
 dir.create("../figures", showWarnings = FALSE)
@@ -69,7 +76,13 @@ t2n <- unique(data.frame(
   stringsAsFactors = FALSE))
 t2n <- t2n[!duplicated(t2n$term), ]
 
-cat("gene sets:", length(unique(t2g$term)), "GO terms over",
+if (SETS == "KEGG") {
+  ks  <- read.csv("../data/kegg_sets.csv", stringsAsFactors = FALSE)
+  t2g <- unique(ks[, c("term", "gene")])
+  t2n <- unique(ks[, c("term", "name")])
+}
+
+cat("gene sets:", length(unique(t2g$term)), SETS, "sets over",
     length(unique(t2g$gene)), "loci,", nrow(t2g), "term-gene pairs\n")
 sz <- table(t2g$term)
 cat("sets within size bounds (", MIN_SET, "to", MAX_SET, "):",
@@ -78,9 +91,11 @@ cat("sets within size bounds (", MIN_SET, "to", MAX_SET, "):",
 
 # ---- 2. Ranked lists ----
 
-res <- read.csv("../output/per_gene_statistics.csv", stringsAsFactors = FALSE)
-res$key <- sub("[.]c123.*$", "", res$gene)
-cmp <- read.csv("../output/rer_comparator.csv", stringsAsFactors = FALSE)
+# The HyphAeon and comparator rankings are sensitivities; run without them if absent.
+read_opt <- function(f) if (file.exists(f)) read.csv(f, stringsAsFactors = FALSE) else NULL
+res <- read_opt("../output/per_gene_statistics.csv")
+if (!is.null(res)) res$key <- sub("[.]c123.*$", "", res$gene)
+cmp <- read_opt("../output/rer_comparator.csv")
 csc <- read.csv("../output/contrast_screen.csv", stringsAsFactors = FALSE)
 csc$key <- sub("[.]c123.*$", "", csc$gene)
 
@@ -139,14 +154,15 @@ run_one <- function(ph, which_stat) {
   df
 }
 
-grid <- expand.grid(ph = unique(res$phenotype), st = names(STATS), stringsAsFactors = FALSE)
+grid <- expand.grid(ph = unique(c(res$phenotype, cmp$phenotype, csc$phenotype)),
+                    st = names(STATS), stringsAsFactors = FALSE)
 all_res <- do.call(rbind, Filter(Negate(is.null),
   mapply(run_one, grid$ph, grid$st, SIMPLIFY = FALSE)))
 if (is.null(all_res)) {
   cat("\nNo GSEA results produced. Run 19_hyphaeon_run.py over the full gene set first.\n")
   quit(save = "no")
 }
-write.csv(all_res, "../output/gsea_results.csv", row.names = FALSE)
+write.csv(all_res, paste0("../output/gsea_results", SUF, ".csv"), row.names = FALSE)
 
 cat("\n", strrep("=", 78), "\n", sep = "")
 # Only the centred statistic is reportable. The rest are kept in the CSV for the record.
@@ -180,7 +196,7 @@ cat(strrep("=", 78), "\n")
 
 # ---- 4. Figure ----
 
-pdf("../figures/Fig4_gsea.pdf", width = 10, height = 6)
+pdf(paste0("../figures/Fig4_gsea", SUF, ".pdf"), width = 10, height = 6)
 all_res <- all_res[all_res$interpretable, ]
 if (!nrow(all_res)) { dev.off(); cat("\nno interpretable ranking available\n"); quit(save="no") }
 phs <- unique(all_res$phenotype)
@@ -202,5 +218,5 @@ for (ph in phs) {
   box(bty = "l", col = "grey45")
 }
 dev.off()
-cat("\nwritten ../figures/Fig4_gsea.pdf\n")
+cat("\nwritten ../figures/Fig4_gsea", SUF, ".pdf\n", sep = "")
 cat("orange bars pass q <", QCUT, "; grey bars do not\n")

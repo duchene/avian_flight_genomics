@@ -1,0 +1,47 @@
+# 21a_kegg_sets.Rscript
+#
+# Builds KEGG gene sets keyed on GALGAL_R loci, from the DIAMOND hits written by
+# hpc/kegg/21a_kegg_sets.sh. One locus maps to the GeneID of its best RefSeq hit; hits
+# below 90 percent identity or covering less than half of the query are discarded, since
+# the query and the database are the same species.
+#
+# In:  ../hpc/work/kegg/{hits.tsv, gga_features.txt.gz, kegg_link.tsv, kegg_list.tsv}
+# Out: ../data/galgal_refseq_map.csv, ../data/kegg_sets.csv
+
+W <- "../hpc/work/kegg"
+
+h <- read.table(file.path(W, "hits.tsv"), sep = "\t", stringsAsFactors = FALSE,
+  col.names = c("gene", "protein", "pident", "length", "qlen", "slen", "evalue", "bitscore"))
+h <- h[order(h$gene, -h$bitscore), ]
+h <- h[!duplicated(h$gene), ]
+h <- h[h$pident >= 90 & h$length / h$qlen >= 0.5, ]
+
+ft <- read.delim(gzfile(file.path(W, "gga_features.txt.gz")), stringsAsFactors = FALSE,
+                 quote = "", comment.char = "")
+names(ft)[1] <- "feature"
+ft <- ft[ft$feature == "CDS" & ft$product_accession != "", c("product_accession", "symbol", "GeneID")]
+ft <- ft[!duplicated(ft$product_accession), ]
+m <- merge(h, ft, by.x = "protein", by.y = "product_accession")
+m <- m[, c("gene", "protein", "symbol", "GeneID", "pident")]
+m <- m[order(m$gene), ]
+write.csv(m, "../data/galgal_refseq_map.csv", row.names = FALSE)
+
+lk <- read.delim(file.path(W, "kegg_link.tsv"), header = FALSE, col.names = c("kg", "path"),
+                 stringsAsFactors = FALSE)
+lk$GeneID <- as.integer(sub("^gga:", "", lk$kg))
+lk$term <- sub("^path:", "", lk$path)
+ls <- read.delim(file.path(W, "kegg_list.tsv"), header = FALSE, col.names = c("term", "name"),
+                 stringsAsFactors = FALSE, quote = "")
+ls$name <- sub(" - Gallus gallus \\(chicken\\)$", "", ls$name)
+
+ks <- merge(m[, c("gene", "GeneID")], lk[, c("GeneID", "term")], by = "GeneID")
+ks <- merge(ks, ls, by = "term")
+ks <- unique(ks[order(ks$term, ks$gene), c("term", "name", "gene")])
+write.csv(ks, "../data/kegg_sets.csv", row.names = FALSE)
+
+nq <- length(readLines(file.path(W, "galgal_aa.fa"))) / 2
+cat("loci searched:", nq, "\n")
+cat("mapped to a RefSeq gene:", nrow(m), sprintf("(%.1f%%)\n", 100 * nrow(m) / nq))
+cat("distinct GeneIDs:", length(unique(m$GeneID)), "\n")
+cat("loci in at least one KEGG pathway:", length(unique(ks$gene)), "\n")
+cat("KEGG pathways:", length(unique(ks$term)), "\n")
