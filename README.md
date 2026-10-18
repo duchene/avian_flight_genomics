@@ -65,7 +65,7 @@ the spreadsheet.
 |---|---|---|
 | `14_traits_assemble` | run, 2 s | Per-taxon and per-pair trait tables, the wing-loading index, its contrasts, the two binary phenotypes |
 | `15_fig_validation` | run, 1 s | Figure 1, framed as validation. Panel C shows the index recovers measured wing loading at R² = 0.93 |
-| `16_rate_contrasts` | run, 6 s | Genome-wide dN, dS and omega contrasts on the index, with migration as a second orthogonal predictor |
+| `16_rate_contrasts` | run, 14 min | Genome-wide dS, dN and omega contrasts in one multi-response Bayesian regression on the index, migration, flight loss and pair age, without and with mass. See below |
 | `17_power_sim` | run, 28 s | Detection power of the 42-pair design, computed analytically from the non-central t |
 | `18_hyphaeon_prep` | run, 33 s | Phenotype table and gene manifest. 14,124 of 14,957 genes retained |
 | `19_hyphaeon_run.py` | run, 26 h | The per-gene screen. Python, not R. See below |
@@ -111,6 +111,29 @@ The RERconverge package itself is not used. It would supply no new null, only a 
 statistic, and that statistic is recovered for free in `20_hyphaeon_collect` by
 double-centring the log per-locus per-taxon rates in `dnds_branches.Rdata`, which is the
 residual RERconverge models. 13,625 genes in minutes, from our own PAML rates.
+
+## The genome-wide rate contrasts
+
+`16_rate_contrasts` summarises each pair by the median across genes of
+ln(rate in the more flight-capable sister / rate in its counterpart), for dS, dN and
+omega, and fits the three jointly in brms with correlated residuals. Sister pairs are
+independent contrasts, so there is no phylogenetic term. Every fit has the same mean
+structure, the loading-index contrast, gain of migration, flight loss and pair age, and
+each data set is fitted twice, without and with the ln mass contrast. Mass sits inside the
+index, so without it the loading term is the full association of wing loading with rates,
+and with it the loading term is the part of loading that mass does not explain.
+
+Four data sets: all 42 pairs, 36 without the six pairs where migration coincides with
+flight loss or limited flight, 30 "to migratory" against "minimal", and 41 without the
+emperor penguin and diving petrel pair, whose loading contrast has a leverage of 0.63.
+dN is kept although it is close to dS + omega on the log scale. A fallback to two
+bivariate fits was fixed before fitting and was not needed: all eight trivariate fits
+converge.
+
+Migration raises dS and dN in every fit and leaves omega unchanged. Flight loss and pair
+age have no credible effect. The loading index has no credible effect on all 42 pairs, a
+credible negative effect on dS in the three sensitivity sets without mass, and none once
+mass is included.
 
 ## The multi-response model
 

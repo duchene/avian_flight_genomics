@@ -1,7 +1,7 @@
 # STATUS
 
 Handoff note. Written for an assistant session resuming this work cold. Last updated
-14 October 2026.
+18 October 2026.
 
 ## Where things stand in one paragraph
 
@@ -46,6 +46,12 @@ been run on GenomeDK for flight, migration and loading and finds nothing at q < 
 9. **Residual correlation is OFF in script 23.** It was retained through two fits, both
    of which failed to mix. The failing version is kept as evidence under `*_rescor` and
    is reproducible with `MRPMM_RESCOR=TRUE`.
+10. **Script 16 is a multi-response Bayesian regression** on the 42 pair contrasts
+    (brms, dS, dN and omega jointly, residual correlation on, no phylogenetic term). It
+    replaces the least-squares fits entirely. Every fit carries the loading index,
+    migration, flight loss and pair age. Each data set is fitted without and with the
+    mass contrast, because mass sits inside the index. Only the median-log-ratio summary
+    is modelled; the proportion-accelerated summary was dropped as redundant (r = 0.99).
 
 ## Numbers already established. Reuse rather than recompute.
 
@@ -77,19 +83,14 @@ all 84 on the index, above only *Aptenodytes forsteri*.
 
 ## Results so far
 
-**16, rate contrasts** (corrected after the factor-indexing bug; the earlier numbers in
-this file were wrong). The flight index explains nothing surviving BH correction, minimum
-p_adj 0.168. Migration does, and the corrected result **reproduces the original paper's
-published finding**: dN and dS are elevated in the migratory sister (p_adj 0.0078 and
-0.015, positive estimates) while omega is unaffected (0.24, 0.18). The buggy version had
-claimed the opposite, a significant omega effect and null dN and dS.
-
-Migration coding sensitivity (section 4b). migration_pair scores 21 pairs: the 15 "to
-migratory" pairs plus six where a volant migrant faces a flightless or weak-flying sister
-(APTFOR-PELURI, PINIMP-ALCTOR, NANHAR-PHACAR, RHYJUB-PHALEP, MESUNI-PTEGUT, GALGAL-COTJAP).
-Dropping those six strengthens the effect (dS 0.227, dN 0.270, p_adj < 0.001), as does
-comparing only "to migratory" against "minimal" (dS 0.253, dN 0.298); adding flight loss
-as a covariate changes nothing. Omega stays null throughout. Reported in the manuscript.
+**16, rate contrasts**, refitted 18 October 2026 as a multi-response Bayesian
+regression; see "Added 18 October 2026" at the end for the design and full numbers.
+Migration raises dS and dN in every one of the eight fits and leaves omega unchanged
+(42 pairs, no mass: dS 0.173, 95% CrI 0.039 to 0.308; dN 0.216, 0.081 to 0.352; omega
+0.024, -0.020 to 0.069). This **reproduces the original paper's published finding**.
+Flight loss and pair age have no credible effect anywhere. The loading index has no
+credible effect on the 42 pairs, becomes credibly negative for dS in each of the three
+sensitivity sets when mass is absent, and is null in every fit that includes mass.
 
 **20b, contrast screen** (also corrected). One gene passes q < 0.05, GALGAL_R08885 on
 dN against the flight index (n = 36, r = -0.695, q = 0.017). The seven genes reported
@@ -180,7 +181,8 @@ still fails, cut the response set to three or four.
 
 | script | time |
 |---|---|
-| 14, 15, 16, 22 | 1 to 6 s each |
+| 14, 15, 22 | 1 to 6 s each |
+| 16 rate contrasts | 854 s for eight brms fits, 4 cores on GenomeDK |
 | 17 power | 28 s |
 | 18 prep | 33 s |
 | **19 screen** | **5.07 s per gene, ~20 h per phenotype, ~20 h wall for three in parallel** |
@@ -308,6 +310,13 @@ activity) are a single overlapping, paralogy-prone family and should be treated 
    plots already exist as `Submission_NatComms/figS1`, showing low damage (0.02 to 0.04 at
    read termini). What is missing is contamination inference and a quantification of how
    residual deamination shifts dN, dS and omega for *Pinguinus*.
+
+5. **Residual variance in script 16 grows with pair age.** The absolute residuals of dS
+   and dN correlate with age at Spearman 0.64 and 0.61 (42 pairs, no mass), while omega
+   does not (-0.06). The agreed model holds variance constant. Modelling `sigma ~ age`,
+   or weighting by age, would match the data better and was proposed and declined before
+   fitting, on the reasoning that very young pairs may also be noisy. The data do not
+   show that, so the decision may be worth revisiting.
 
 ## Carried over, not yet scheduled
 
@@ -441,3 +450,59 @@ The fits and harvest tables are copied to `output/` on GenomeDK. The manuscript 
 credible correlation of either flight axis with any genomic trait "in any specification".
 That is not quite true: GC content with the loading index is credible in the trimmed fit
 only (r 0.22, 95% CI 0.01 to 0.41; full data 0.13, -0.10 to 0.35). The text now says so.
+
+## Added 18 October 2026
+
+### Script 16 rebuilt as a multi-response Bayesian regression
+
+The script fits dS, dN and omega median log ratios jointly with brms, residual correlation
+on:
+
+    rate ~ d_loading + migration_pair + flight_loss_pair + age [+ d_logmass]
+
+Four data sets, each without and with mass, eight fits: all 42 pairs; 36 without the six
+pairs where migration coincides with flight loss or limited flight (two flight-loss pairs
+remain); 30 "to migratory" against "minimal" (flight loss constant, dropped); and 41
+without APTFOR-PELURI. Responses standardized, continuous predictors divided by 2 SD,
+normal(0, 1) coefficients, LKJ(2) residual correlation, 4 x 4000 iterations.
+
+**dN was kept although dN is close to dS + omega** (r = 0.994). A fallback to two
+bivariate fits was fixed before fitting and was not needed: every trivariate fit has Rhat
+<= 1.01, bulk and tail ESS >= 2,882 and no divergent transition. The residual
+correlation of dS with dN is 0.94 (0.88 to 0.97).
+
+**The penguin pair.** APTFOR-PELURI-FV has a loading contrast of -4.62 (z = 4.75) and a
+mass contrast of -5.40 (z = 3.29), real biology rather than an error. Its leverage is 0.63
+and its Cook's distance the largest for dS and dN in the model without mass. Kept in the
+primary fits and dropped in a sensitivity, by decision.
+
+Posterior medians and 95% CrI, ln-ratio units per unit of predictor:
+
+| term | data set | mass | dS | dN | omega |
+|---|---|---|---|---|---|
+| migration | 42 | no | 0.173 (0.039, 0.308) | 0.216 (0.081, 0.352) | 0.024 (-0.020, 0.069) |
+| migration | 42 | yes | 0.175 (0.056, 0.294) | 0.219 (0.094, 0.345) | 0.024 (-0.021, 0.070) |
+| migration | 36, no overlap | no | 0.251 (0.126, 0.374) | 0.293 (0.175, 0.417) | 0.026 (-0.027, 0.080) |
+| migration | 30, mig vs minimal | no | 0.229 (0.104, 0.358) | 0.275 (0.147, 0.407) | 0.031 (-0.029, 0.090) |
+| loading | 42 | no | -0.083 (-0.179, 0.014) | -0.060 (-0.158, 0.038) | 0.020 (-0.013, 0.052) |
+| loading | 42 | yes | 0.081 (-0.050, 0.216) | 0.075 (-0.060, 0.215) | -0.011 (-0.059, 0.034) |
+| loading | 36, no overlap | no | -0.154 (-0.288, -0.025) | -0.135 (-0.262, -0.006) | 0.019 (-0.038, 0.077) |
+| loading | 30, mig vs minimal | no | -0.159 (-0.299, -0.018) | -0.131 (-0.275, 0.005) | 0.026 (-0.039, 0.090) |
+| loading | 41, no penguin | no | -0.162 (-0.306, -0.020) | -0.135 (-0.279, 0.010) | 0.026 (-0.024, 0.074) |
+| flight loss | 42 | no | -0.175 (-0.406, 0.058) | -0.140 (-0.375, 0.094) | 0.038 (-0.043, 0.119) |
+| body mass | 42 | yes | -0.102 (-0.164, -0.044) | -0.084 (-0.150, -0.022) | 0.019 (-0.002, 0.041) |
+
+All loading terms with mass are null (|estimate| <= 0.082, every interval spans zero). Age
+is null in every fit. A negative loading coefficient means the sister with the lower
+loading, almost always the more flight-capable one, evolves faster. That association
+appears only once the penguin pair or the overlap pairs are removed, and it disappears
+when the mass contrast enters, so it cannot be separated from body size.
+
+The mass effect on omega is credible only without the overlap pairs (0.026, 0.001 to
+0.051).
+
+Run on GenomeDK: brms 2.22 and rstan installed into `dduchene/tools/Rlib` for the shared
+`r-ver_4.4.1.sif` container (job script `dduchene/jobs/install_brms.sh`), fits run by
+`dduchene/jobs/run16_rate_contrasts.sh`. The fits are saved to
+`output/rate_contrast_fits.rds`. The manuscript repository's `figure_code/fig2_contrasts.R`
+now reads `rate_contrast_posteriors.csv` and `rate_contrast_loading_line.csv`.

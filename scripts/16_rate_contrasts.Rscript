@@ -1,26 +1,77 @@
 # 16_rate_contrasts.Rscript
 #
-# Genome-wide dN, dS and omega contrasts against the flight index.
+# Genome-wide dS, dN and omega contrasts across the 42 sister pairs, fitted jointly as a
+# multi-response Bayesian regression.
 #
-# Sister pairs are independent contrasts by construction, so ordinary least squares on
-# the 42 pair-level contrasts needs no further phylogenetic correction.
+# Sister pairs are independent contrasts by construction, so no phylogenetic term enters.
+# The three rate contrasts are fitted together with correlated residuals, so that one
+# posterior describes the effect of each phenotype on all three rates. With the same
+# predictors in every response, the coefficients stay close to those of separate
+# regressions. What the joint fit adds is the residual correlation among rates and joint
+# statements across them. Replaces the least-squares fits of the earlier version, which
+# were six separate models with Benjamini-Hochberg correction across responses.
 #
-# Migration enters as a second predictor rather than as an alternative. The two axes are
-# statistically orthogonal, and the only significant genome-wide signal found so far sits
-# on the migration axis, so fitting the flight index alone risks attributing a null to
-# the wrong cause.
+# MEAN STRUCTURE, identical for every response and every fit:
+#
+#   d_loading         contrast in ln(mass / wing length^2), greater minus lesser flight
+#   migration_pair    1 if the greater-flight sister is a winged migrant and the other is not
+#   flight_loss_pair  1 if either sister has lost or nearly lost flight
+#   age               pair age, Ma
+#   d_logmass         contrast in ln mass, in the "mass" fits only
+#
+# TWO FITS PER DATA SET, WITHOUT AND WITH MASS. Mass sits inside the index (index =
+# ln mass - 2 ln wing length) and the two contrasts correlate at r = 0.75. Without mass,
+# the loading term is the full association of wing loading with rates, which is the
+# hypothesis. With mass, it is the part of loading that mass does not explain, which in
+# practice means wing length at a given mass, and the mass term is a size control rather
+# than an effect of body size. Both are reported.
+#
+# AGE enters the mean only. Variance is not modelled on age, because young pairs carry few
+# substitutions and old pairs accumulate divergence, so no monotone variance function can
+# be justified in advance. The relation between residuals and age is reported after
+# fitting.
+#
+# dN IS KEPT, although on the log scale dN is close to dS + omega (r = 0.994 with their
+# sum), so the trivariate residual covariance may be near singular. The fallback was fixed
+# before fitting: a fit with max Rhat > 1.01, minimum bulk or tail ESS < 400, or any
+# divergent transition is refitted as two bivariate models, {dS, omega} and {dN, omega},
+# and dS and omega are then reported from the first.
+#
+# DATA SETS
+#
+#   all           42 pairs
+#   drop_overlap  36 pairs. Removes the six where a volant migrant faces a flightless or
+#                 weak-flying sister, so that the migration difference coincides with
+#                 flight loss or limited flight. Only two flight-loss pairs remain.
+#   mig_vs_min    30 pairs, "to migratory" and "minimal" only. flight_loss_pair is zero
+#                 throughout and is dropped from the mean.
+#   drop_aptfor   41 pairs. Removes Aptenodytes forsteri against Pelecanoides urinatrix,
+#                 which has a loading contrast of z = 4.75 and a leverage of 0.63.
+#
+# SCALING AND PRIORS. Responses are standardized. Continuous predictors are divided by
+# twice their SD, so their coefficients are comparable with the binary terms (Gelman
+# 2008). Scaling constants come from the 42 pairs and are shared by every data set.
+# Priors: normal(0, 1) on coefficients, student_t(3, 0, 1) on intercepts, exponential(1)
+# on residual SDs, LKJ(2) on the residual correlation. Estimates are reported back on the
+# ln-ratio scale, both per unit of each predictor and per 2 SD.
 #
 # DIRECTION. moldiff in dnds_sisdifs_vol.Rdata is sp1/sp2, but sp1 is NOT always the
 # lesser-flight sister: in 7 of the 42 pairs the AviList reordering of Table S1 put the
 # sisters the other way round. Every contrast below is therefore oriented explicitly
 # against the trait table, never by position.
 #
-# Requires: none beyond base R
+# Requires: brms, posterior (rstan backend)
 # In:  ../output/traits_contrasts.csv, ../output/traits_per_taxon.csv,
 #      ../data/dnds_sisdifs_vol.Rdata
-# Out: ../output/rate_contrasts.csv, ../output/rate_contrast_models.csv,
-#      ../output/rate_contrast_migration_sensitivity.csv,
+# Out: ../output/rate_contrasts.csv, ../output/rate_contrast_posteriors.csv,
+#      ../output/rate_contrast_rescor.csv, ../output/rate_contrast_diagnostics.csv,
+#      ../output/rate_contrast_loading_line.csv, ../output/rate_contrast_fits.rds,
 #      ../figures/Fig2_rate_contrasts.pdf
+
+suppressPackageStartupMessages({
+  library(brms)
+  library(posterior)
+})
 
 contr <- read.csv("../output/traits_contrasts.csv", stringsAsFactors = FALSE)
 taxa  <- read.csv("../output/traits_per_taxon.csv", stringsAsFactors = FALSE)
@@ -28,6 +79,9 @@ load("../data/dnds_sisdifs_vol.Rdata")
 
 dir.create("../output", showWarnings = FALSE)
 dir.create("../figures", showWarnings = FALSE)
+
+CHAINS <- 4; ITER <- 4000; WARMUP <- 2000; SEED <- 2026
+CORES  <- min(CHAINS, parallel::detectCores())
 
 
 # ---- 1. Orientation key ----
@@ -49,11 +103,8 @@ cat("  ", paste(flipped, collapse = ", "), "\n\n")
 
 # ---- 2. Genome-wide contrast per pair ----
 #
-# Two summaries per pair and rate type.
-#   med_logratio  median across genes of log(greater / lesser). A positive value means
-#                 the more flight-capable sister evolves faster.
-#   prop_accel    proportion of genes in which the more flight-capable sister is faster,
-#                 centred on 0.5. Comparable to propAccel* used in the previous version.
+# med_logratio  median across genes of log(greater / lesser). A positive value means the
+#               more flight-capable sister evolves faster.
 
 summarise_rate <- function(d, label) {
   d$contrast <- orient(d)
@@ -62,7 +113,6 @@ summarise_rate <- function(d, label) {
     data.frame(comparison = x$comparison[1],
                n_genes = nrow(x),
                med_logratio = median(x$contrast),
-               prop_accel = mean(x$contrast > 0) - 0.5,
                stringsAsFactors = FALSE)
   }))
   names(agg)[-1] <- paste0(names(agg)[-1], "_", label)
@@ -82,127 +132,251 @@ stopifnot(nrow(dat) == 42)
 write.csv(dat, "../output/rate_contrasts.csv", row.names = FALSE)
 
 
-# ---- 3. Models ----
-#
-# response ~ flight index contrast + migration + body mass contrast
-#
-# The intercept is retained and is interpretable: it tests whether the more
-# flight-capable sister differs systematically irrespective of the trait values.
+# ---- 3. Scaling ----
 
-responses <- c("med_logratio_ds", "med_logratio_dn", "med_logratio_w",
-               "prop_accel_ds", "prop_accel_dn", "prop_accel_w")
+RESP  <- c(ds = "med_logratio_ds", dn = "med_logratio_dn", w = "med_logratio_w")
+CONT  <- c("d_loading", "age", "d_logmass")
+BIN   <- c("migration_pair", "flight_loss_pair")
 
-fit_one <- function(y) {
-  f <- as.formula(paste(y, "~ d_loading + migration_pair + d_logmass"))
-  m <- lm(f, data = dat)
-  s <- summary(m)
-  cf <- as.data.frame(s$coefficients)
-  names(cf) <- c("estimate", "se", "t", "p")
-  ci <- confint(m)
-  data.frame(response = y, term = rownames(cf), cf,
-             lower = ci[, 1], upper = ci[, 2],
-             r2 = s$r.squared, n = nobs(m), row.names = NULL)
+y_mean <- sapply(RESP, function(v) mean(dat[[v]]))
+y_sd   <- sapply(RESP, function(v) sd(dat[[v]]))
+x_mean <- sapply(CONT, function(v) mean(dat[[v]]))
+x_div  <- sapply(CONT, function(v) 2 * sd(dat[[v]]))
+
+scaled <- function(d) {
+  out <- d[, c("pair_id", "habit", BIN)]
+  for (r in names(RESP)) out[[r]] <- (d[[RESP[r]]] - y_mean[r]) / y_sd[r]
+  for (v in CONT) out[[v]] <- (d[[v]] - x_mean[v]) / x_div[v]
+  out
 }
-
-tab <- do.call(rbind, lapply(responses, fit_one))
-tab$p_adj <- NA
-for (tm in unique(tab$term)) {
-  i <- tab$term == tm
-  tab$p_adj[i] <- p.adjust(tab$p[i], method = "BH")
-}
-write.csv(tab, "../output/rate_contrast_models.csv", row.names = FALSE)
-
-cat("Models, flight index term only (BH-adjusted across the six responses):\n\n")
-print(format(tab[tab$term == "d_loading",
-                 c("response", "estimate", "lower", "upper", "p", "p_adj", "r2")],
-             digits = 3), row.names = FALSE)
-cat("\nMigration term:\n\n")
-print(format(tab[tab$term == "migration_pair",
-                 c("response", "estimate", "lower", "upper", "p", "p_adj")],
-             digits = 3), row.names = FALSE)
-
-
-# ---- 4. Sensitivity on the alternative shape index ----
-
-sens <- do.call(rbind, lapply(responses, function(y) {
-  m <- lm(as.formula(paste(y, "~ d_shape + migration_pair + d_logmass")), data = dat)
-  cf <- summary(m)$coefficients["d_shape", ]
-  data.frame(response = y, term = "d_shape", estimate = cf[1], p = cf[4], row.names = NULL)
-}))
-cat("\nSensitivity, ln(wing / mass^(1/3)) in place of the loading index:\n\n")
-print(format(sens, digits = 3), row.names = FALSE)
-
-
-# ---- 4b. Sensitivity on the migration coding ----
-#
-# migration_pair follows the Winged migration column, so it scores 21 pairs: the 15 in the
-# "to migratory" category plus six in which a volant migrant is paired with a flightless
-# or weak-flying sister (five toward flight loss, one toward limited flight). In those six
-# the migration difference most likely arose by loss alongside flight, not by gain, and it
-# coincides with flight loss. Each variant below refits the primary model and reports the
-# migration term, BH-adjusted across the six responses as above.
-#
-#   all_21          primary model, for reference
-#   plus_flightloss flight loss added as a covariate
-#   drop_overlap    the six overlapping pairs removed (36 pairs, 15 migration)
-#   mig_vs_minimal  only the 15 "to migratory" and 15 "minimal" pairs
 
 dat$overlap <- dat$migration_pair == 1 & dat$habit != "to migratory"
-cat("\nmigration pairs outside the 'to migratory' category:",
-    paste(dat$pair_id[dat$overlap], collapse = ", "), "\n")
 stopifnot(sum(dat$migration_pair) == 21, sum(dat$overlap) == 6)
+cat("overlap pairs:", paste(dat$pair_id[dat$overlap], collapse = ", "), "\n\n")
 
-variants <- list(
-  all_21          = list(d = dat, f = "~ d_loading + migration_pair + d_logmass"),
-  plus_flightloss = list(d = dat, f = "~ d_loading + migration_pair + flight_loss_pair + d_logmass"),
-  drop_overlap    = list(d = dat[!dat$overlap, ], f = "~ d_loading + migration_pair + d_logmass"),
-  mig_vs_minimal  = list(d = dat[dat$habit %in% c("to migratory", "minimal"), ],
-                         f = "~ d_loading + migration_pair + d_logmass"))
+sets <- list(
+  all          = dat,
+  drop_overlap = dat[!dat$overlap, ],
+  mig_vs_min   = dat[dat$habit %in% c("to migratory", "minimal"), ],
+  drop_aptfor  = dat[dat$pair_id != "APTFOR-PELURI-FV", ])
+stopifnot(sapply(sets, nrow) == c(42, 36, 30, 41))
 
-mig_sens <- do.call(rbind, lapply(names(variants), function(v) {
-  out <- do.call(rbind, lapply(responses, function(y) {
-    m  <- lm(as.formula(paste(y, variants[[v]]$f)), data = variants[[v]]$d)
-    cf <- summary(m)$coefficients["migration_pair", ]
-    ci <- confint(m)["migration_pair", ]
-    data.frame(variant = v, response = y, n_pairs = nobs(m),
-               n_migration = sum(variants[[v]]$d$migration_pair),
-               estimate = cf[1], lower = ci[1], upper = ci[2], p = cf[4], row.names = NULL)
-  }))
-  out$p_adj <- p.adjust(out$p, method = "BH")
+
+# ---- 4. Fitting ----
+
+# In a multivariate model brms takes the residual SD prior per response, so it is added
+# in fit_mv for whichever responses enter.
+PRIORS <- c(prior(normal(0, 1), class = "b"),
+            prior(student_t(3, 0, 1), class = "Intercept"),
+            prior(lkj(2), class = "rescor"))
+
+terms_for <- function(d, mass) {
+  tm <- c("d_loading", "migration_pair", "flight_loss_pair", "age")
+  if (mass) tm <- c(tm, "d_logmass")
+  # a term that does not vary in the subset cannot be estimated
+  tm[sapply(tm, function(v) length(unique(d[[v]])) > 1)]
+}
+
+fit_mv <- function(d, resp, tm) {
+  rhs  <- paste(tm, collapse = " + ")
+  form <- Reduce(`+`, lapply(resp, function(r) bf(as.formula(paste(r, "~", rhs))))) +
+    set_rescor(TRUE)
+  pr <- c(PRIORS, do.call(c, lapply(resp, function(r)
+    set_prior("exponential(1)", class = "sigma", resp = r))))
+  brm(form, data = d, prior = pr, chains = CHAINS, iter = ITER, warmup = WARMUP,
+      seed = SEED, cores = CORES, refresh = 0,
+      control = list(adapt_delta = 0.95, max_treedepth = 12))
+}
+
+diagnose <- function(fit) {
+  s <- summarise_draws(as_draws_df(fit), "rhat", "ess_bulk", "ess_tail")
+  s <- s[!grepl("^lp__|^lprior", s$variable), ]
+  np <- nuts_params(fit)
+  data.frame(max_rhat = max(s$rhat, na.rm = TRUE),
+             min_ess_bulk = min(s$ess_bulk, na.rm = TRUE),
+             min_ess_tail = min(s$ess_tail, na.rm = TRUE),
+             divergent = sum(np$Value[np$Parameter == "divergent__"]))
+}
+
+passes <- function(dg) dg$max_rhat <= 1.01 && dg$min_ess_bulk >= 400 &&
+  dg$min_ess_tail >= 400 && dg$divergent == 0
+
+# Posterior draws of each coefficient, back on the ln-ratio scale per unit of predictor.
+coef_draws <- function(fit, resp, tm) {
+  dr <- as_draws_df(fit)
+  out <- list()
+  for (r in resp) for (v in tm) {
+    b <- dr[[paste0("b_", r, "_", v)]] * y_sd[r]
+    if (v %in% CONT) b <- b / x_div[v]
+    out[[paste(r, v, sep = ":")]] <- b
+  }
   out
+}
+
+summarise_coef <- function(draws, set, mass, model) {
+  do.call(rbind, lapply(names(draws), function(k) {
+    b <- draws[[k]]; r <- sub(":.*", "", k); v <- sub(".*:", "", k)
+    k2 <- if (v %in% CONT) x_div[v] else 1
+    q <- quantile(b, c(0.5, 0.025, 0.975))
+    data.frame(set = set, mass = mass, model = model, response = r, term = v,
+               estimate = q[1], lower = q[2], upper = q[3],
+               estimate_2sd = q[1] * k2, lower_2sd = q[2] * k2, upper_2sd = q[3] * k2,
+               pd = max(mean(b > 0), mean(b < 0)), row.names = NULL)
+  }))
+}
+
+summarise_rescor <- function(fit, set, mass, model) {
+  dr <- as_draws_df(fit)
+  rc <- grep("^rescor__", names(dr), value = TRUE)
+  do.call(rbind, lapply(rc, function(k) {
+    q <- quantile(dr[[k]], c(0.5, 0.025, 0.975))
+    data.frame(set = set, mass = mass, model = model,
+               pair = sub("^rescor__", "", k), estimate = q[1], lower = q[2],
+               upper = q[3], row.names = NULL)
+  }))
+}
+
+# Spearman correlation of |posterior mean residual| with pair age, per response.
+resid_age <- function(fit, d, resp) {
+  res <- residuals(fit)
+  sapply(resp, function(r) cor(abs(res[, "Estimate", r]), d$age, method = "spearman"))
+}
+
+post <- list(); resc <- list(); diag <- list(); fits <- list()
+
+for (s in names(sets)) for (mass in c(FALSE, TRUE)) {
+  d  <- scaled(sets[[s]])
+  tm <- terms_for(d, mass)
+  lab <- paste0(s, if (mass) "_mass" else "")
+  cat("==== fitting", lab, "(n =", nrow(d), ") :", paste(tm, collapse = " + "), "\n")
+
+  fit <- fit_mv(d, c("ds", "dn", "w"), tm)
+  dg  <- diagnose(fit)
+  ra  <- resid_age(fit, sets[[s]], c("ds", "dn", "w"))
+
+  if (passes(dg)) {
+    model <- "trivariate"
+    draws <- coef_draws(fit, c("ds", "dn", "w"), tm)
+    resc[[lab]] <- summarise_rescor(fit, s, mass, model)
+    fits[[lab]] <- fit
+    diag[[lab]] <- data.frame(set = s, mass = mass, model = model, fit = "ds_dn_w",
+                              n = nrow(d), dg, t(setNames(ra, paste0("resid_age_", names(ra)))))
+  } else {
+    cat("  trivariate fit fails the convergence criteria, refitting as two bivariate fits\n")
+    print(dg)
+    model <- "bivariate"
+    f1 <- fit_mv(d, c("ds", "w"), tm); f2 <- fit_mv(d, c("dn", "w"), tm)
+    draws <- c(coef_draws(f1, c("ds", "w"), tm), coef_draws(f2, "dn", tm))
+    resc[[lab]] <- rbind(summarise_rescor(f1, s, mass, model),
+                         summarise_rescor(f2, s, mass, model))
+    fits[[lab]] <- list(ds_w = f1, dn_w = f2)
+    diag[[lab]] <- rbind(
+      data.frame(set = s, mass = mass, model = "trivariate (rejected)", fit = "ds_dn_w",
+                 n = nrow(d), dg, t(setNames(ra, paste0("resid_age_", names(ra))))),
+      data.frame(set = s, mass = mass, model = model, fit = "ds_w", n = nrow(d),
+                 diagnose(f1), resid_age_ds = NA, resid_age_dn = NA, resid_age_w = NA),
+      data.frame(set = s, mass = mass, model = model, fit = "dn_w", n = nrow(d),
+                 diagnose(f2), resid_age_ds = NA, resid_age_dn = NA, resid_age_w = NA))
+  }
+  post[[lab]] <- summarise_coef(draws, s, mass, model)
+}
+
+post <- do.call(rbind, post); resc <- do.call(rbind, resc); diag <- do.call(rbind, diag)
+write.csv(post, "../output/rate_contrast_posteriors.csv", row.names = FALSE)
+write.csv(resc, "../output/rate_contrast_rescor.csv", row.names = FALSE)
+write.csv(diag, "../output/rate_contrast_diagnostics.csv", row.names = FALSE)
+saveRDS(fits, "../output/rate_contrast_fits.rds")
+
+cat("\nConvergence:\n\n"); print(format(diag, digits = 3), row.names = FALSE)
+show <- function(tm, title) {
+  cat("\n", title, " (posterior median and 95% CrI, ln-ratio per unit):\n\n", sep = "")
+  x <- post[post$term == tm, c("set", "mass", "response", "estimate", "lower", "upper", "pd")]
+  print(format(x, digits = 3), row.names = FALSE)
+}
+show("d_loading", "Wing-loading index")
+show("migration_pair", "Gain of migration")
+show("flight_loss_pair", "Flight loss")
+show("age", "Pair age")
+show("d_logmass", "Body mass")
+cat("\nResidual correlations:\n\n"); print(format(resc, digits = 3), row.names = FALSE)
+
+
+# ---- 5. Conditional effect of the loading index ----
+#
+# Posterior mean rate contrast across the observed range of the loading contrast, with
+# every other predictor held at its mean in the 42 pairs. Drawn in the figure, and by
+# figure_code/fig2_contrasts.R in the manuscript repository.
+
+xs <- seq(min(dat$d_loading), max(dat$d_loading), length.out = 60)
+line <- do.call(rbind, lapply(c(FALSE, TRUE), function(mass) {
+  lab <- paste0("all", if (mass) "_mass" else "")
+  f <- fits[[lab]]
+  tm <- terms_for(scaled(dat), mass)
+  do.call(rbind, lapply(c("ds", "dn", "w"), function(r) {
+    fr <- if (inherits(f, "brmsfit")) f else if (r == "dn") f$dn_w else f$ds_w
+    dr <- as_draws_df(fr)
+    others <- setdiff(tm, "d_loading")
+    base <- dr[[paste0("b_", r, "_Intercept")]]
+    for (v in others) base <- base + dr[[paste0("b_", r, "_", v)]] * mean(scaled(dat)[[v]])
+    bl <- dr[[paste0("b_", r, "_d_loading")]]
+    q <- t(sapply((xs - x_mean["d_loading"]) / x_div["d_loading"], function(x)
+      quantile((base + bl * x) * y_sd[r] + y_mean[r], c(0.5, 0.025, 0.975))))
+    data.frame(mass = mass, response = r, d_loading = xs,
+               estimate = q[, 1], lower = q[, 2], upper = q[, 3])
+  }))
 }))
-write.csv(mig_sens, "../output/rate_contrast_migration_sensitivity.csv", row.names = FALSE)
-cat("\nSensitivity, migration term under alternative codings:\n\n")
-print(format(mig_sens, digits = 3), row.names = FALSE)
+write.csv(line, "../output/rate_contrast_loading_line.csv", row.names = FALSE)
 
 
-# ---- 5. Figure ----
+# ---- 6. Figure ----
+#
+# Top row, rate contrasts against the loading contrast with the conditional posterior line
+# of the fit without mass. Bottom row, coefficients per 2 SD of each continuous predictor,
+# for every data set, without (filled) and with (open) mass.
 
-pdf("../figures/Fig2_rate_contrasts.pdf", width = 10, height = 6.8)
+pdf("../figures/Fig2_rate_contrasts.pdf", width = 10, height = 7.4)
 par(mfrow = c(2, 3), mar = c(4.2, 4.4, 2.6, 1), tcl = -0.25, mgp = c(2.5, 0.5, 0),
     cex.axis = 0.85)
-labs <- c(med_logratio_ds = "dS", med_logratio_dn = "dN", med_logratio_w = "omega",
-          prop_accel_ds = "dS", prop_accel_dn = "dN", prop_accel_w = "omega")
-ylabs <- c(rep("median log(greater / lesser)", 3),
-           rep("proportion accelerated - 0.5", 3))
-pal <- c("0" = "#2B7A9B", "1" = "#D1793B")
-for (i in seq_along(responses)) {
-  y <- dat[[responses[i]]]
-  plot(dat$d_loading, y, type = "n", xlab = "", ylab = "",
-       main = labs[responses[i]], font.main = 1, cex.main = 1)
+labs <- c(ds = "dS", dn = "dN", w = "omega")
+pal  <- c("0" = "#2B7A9B", "1" = "#D1793B")
+for (r in names(labs)) {
+  y <- dat[[RESP[r]]]
+  plot(dat$d_loading, y, type = "n", xlab = "", ylab = "", main = labs[r],
+       font.main = 1, cex.main = 1)
   abline(h = 0, col = "grey88", lwd = 1)
-  m <- lm(y ~ d_loading, data = dat)
-  xs <- seq(min(dat$d_loading), max(dat$d_loading), length.out = 50)
-  pr <- predict(m, newdata = data.frame(d_loading = xs), interval = "confidence")
-  polygon(c(xs, rev(xs)), c(pr[, 2], rev(pr[, 3])), col = "grey93", border = NA)
-  lines(xs, pr[, 1], col = "grey30", lwd = 1.8)
+  l <- line[!line$mass & line$response == r, ]
+  polygon(c(l$d_loading, rev(l$d_loading)), c(l$lower, rev(l$upper)),
+          col = "grey93", border = NA)
+  lines(l$d_loading, l$estimate, col = "grey30", lwd = 1.8)
   points(dat$d_loading, y, pch = 21, cex = 1.2, lwd = 0.7, col = "white",
          bg = pal[as.character(dat$migration_pair)])
   mtext(expression(Delta~ln(mass / wing~length^2)), side = 1, line = 2.4, cex = 0.7)
-  mtext(ylabs[i], side = 2, line = 2.5, cex = 0.7)
-  if (i == 1) legend("topright", bty = "n", cex = 0.75, pch = 21, pt.lwd = 0.7,
-                     col = "white", pt.bg = pal,
-                     legend = c("no migration change", "migration gain"))
+  mtext("median log(greater / lesser)", side = 2, line = 2.5, cex = 0.7)
+  if (r == "ds") legend("topright", bty = "n", cex = 0.75, pch = 21, pt.lwd = 0.7,
+                        col = "white", pt.bg = pal,
+                        legend = c("no migration change", "migration gain"))
+  box(bty = "l", col = "grey45")
+}
+TERMS <- c(d_loading = "loading index", migration_pair = "migration gain",
+           flight_loss_pair = "flight loss", age = "pair age", d_logmass = "body mass")
+SETS  <- c(all = "#222222", drop_overlap = "#D1793B", mig_vs_min = "#2B7A9B",
+           drop_aptfor = "#8C6BB1")
+par(mar = c(4.2, 7.6, 1.2, 1))
+for (r in names(labs)) {
+  p <- post[post$response == r, ]
+  yy <- match(p$term, names(TERMS)) +
+    (match(p$set, names(SETS)) - 2.5) * 0.09 + ifelse(p$mass, 0.04, -0.04)
+  plot(NA, xlim = range(c(p$lower_2sd, p$upper_2sd)), ylim = c(length(TERMS) + 0.5, 0.5),
+       yaxt = "n", xlab = "", ylab = "")
+  abline(v = 0, col = "grey80")
+  axis(2, at = seq_along(TERMS), labels = TERMS, las = 1, cex.axis = 0.85)
+  segments(p$lower_2sd, yy, p$upper_2sd, yy, col = SETS[p$set], lwd = 1)
+  points(p$estimate_2sd, yy, pch = ifelse(p$mass, 21, 19), cex = 0.8, col = SETS[p$set],
+         bg = "white")
+  mtext("effect on median log ratio (per 2 SD)", side = 1, line = 2.4, cex = 0.7)
+  if (r == "ds") legend("bottomright", bty = "n", cex = 0.7, lwd = 1, col = SETS,
+                        legend = c("42 pairs", "without overlap", "migratory vs minimal",
+                                   "without penguin pair"))
   box(bty = "l", col = "grey45")
 }
 dev.off()
