@@ -66,6 +66,7 @@ the spreadsheet.
 | `14_traits_assemble` | run, 2 s | Per-taxon and per-pair trait tables, the wing-loading index, its contrasts, the two binary phenotypes |
 | `15_fig_validation` | run, 1 s | Figure 1, framed as validation. Panel C shows the index recovers measured wing loading at R² = 0.93 |
 | `16_rate_contrasts` | run, 14 min | Genome-wide dS, dN and omega contrasts in one multi-response Bayesian regression on the index, migration, flight loss and pair age, without and with mass. See below |
+| `16b_mass_vs_loading` | run, 33 min | Mass in place of the index in the script 16 model, and leave-one-out comparison of the loading, mass and combined models. Mass predicts best in every data set |
 | `17_power_sim` | run, 28 s | Detection power of the 42-pair design, computed analytically from the non-central t |
 | `18_hyphaeon_prep` | run, 33 s | Phenotype table and gene manifest. 14,124 of 14,957 genes retained |
 | `19_hyphaeon_run.py` | run, 26 h | The per-gene screen. Python, not R. See below |
@@ -134,6 +135,12 @@ Migration raises dS and dN in every fit and leaves omega unchanged. Flight loss 
 age have no credible effect. The loading index has no credible effect on all 42 pairs, a
 credible negative effect on dS in the three sensitivity sets without mass, and none once
 mass is included.
+
+`16b_mass_vs_loading` fits the same model with mass in place of the index and compares the
+three versions by leave-one-out cross-validation on the joint likelihood of the three rates.
+The mass-only model predicts best in all four data sets, ahead of the loading-only model by
+3.6 to 6.2 elpd (1.1 to 1.9 SE), and adding the index to mass worsens prediction by 2.9 to
+3.7 elpd (2 to 4 SE).
 
 ## The multi-response model
 

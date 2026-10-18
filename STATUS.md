@@ -506,3 +506,29 @@ Run on GenomeDK: brms 2.22 and rstan installed into `dduchene/tools/Rlib` for th
 `dduchene/jobs/run16_rate_contrasts.sh`. The fits are saved to
 `output/rate_contrast_fits.rds`. The manuscript repository's `figure_code/fig2_contrasts.R`
 now reads `rate_contrast_posteriors.csv` and `rate_contrast_loading_line.csv`.
+
+### Mass against the loading index, head to head (16b)
+
+Script 16 only ever fits mass alongside the index, so `16b_mass_vs_loading` adds the
+missing model, mass in place of the index, and compares loading-only, mass-only and both
+by approximate LOO on the joint dS, dN and omega likelihood. Pairs with Pareto k > 0.7 (0
+to 4 per model) were refitted exactly. All four mass fits converge (Rhat <= 1.002, ESS
+>= 3,900, no divergences).
+
+elpd difference from the best model, which is mass-only in every data set:
+
+| data set | both | loading only |
+|---|---|---|
+| 42 pairs | -2.9 (SE 1.5) | -6.2 (SE 3.5) |
+| 36, no overlap | -3.7 (1.7) | -6.2 (3.2) |
+| 30, mig vs minimal | -3.7 (1.4) | -3.6 (3.2) |
+| 41, no penguin | -3.3 (0.8) | -5.5 (3.6) |
+
+Mass beats loading every time, but each gap is only 1.1 to 1.9 SE, and the data sets
+overlap, so the agreement is about robustness rather than independent replication. Adding
+the index to mass costs 2 to 4 SE, the clearer statement: the index carries no predictive
+information beyond mass. The mass coefficient with the index absent is stable across data
+sets (dS -0.23 to -0.28 per 2 SD, dN -0.18 to -0.23, all credible). Omega is weakly
+positive (about +0.05 per 2 SD), credible in three of four sets. The manuscript text is
+left to David. Outputs: `output/mass_vs_loading_loo.csv`, `output/mass_vs_loading_coef.csv`.
+Job script `dduchene/jobs/run16b_mass_vs_loading.sh`, 2005 s on 4 cores.

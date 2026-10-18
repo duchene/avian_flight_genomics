@@ -1,0 +1,128 @@
+# 16b_mass_vs_loading.Rscript
+#
+# Head-to-head comparison of body mass and the wing-loading index as predictors of the
+# genome-wide rate contrasts.
+#
+# Script 16 fits each data set without and with the mass contrast, so its mass coefficient
+# is always conditional on the loading index. This script adds the missing third model,
+# with mass in place of the index, and compares the three by approximate leave-one-out
+# cross-validation on the joint likelihood of dS, dN and omega:
+#
+#   loading  rate ~ d_loading + migration_pair + flight_loss_pair + age   (from script 16)
+#   mass     rate ~ d_logmass + migration_pair + flight_loss_pair + age   (fitted here)
+#   both     rate ~ d_loading + d_logmass + ...                            (from script 16)
+#
+# Pairs with Pareto k > 0.7 are refitted exactly (reloo) rather than approximated. The
+# penguin pair is the obvious candidate, given its leverage on the loading contrast.
+#
+# Scaling, priors and sampler settings are copied from script 16 so the mass model is
+# directly comparable with the fits it is compared against.
+#
+# Requires: brms, posterior, loo; script 16 run first
+# In:  ../output/rate_contrasts.csv, ../output/rate_contrast_fits.rds
+# Out: ../output/mass_vs_loading_loo.csv, ../output/mass_vs_loading_coef.csv
+
+suppressPackageStartupMessages({
+  library(brms)
+  library(posterior)
+  library(loo)
+})
+
+dat  <- read.csv("../output/rate_contrasts.csv", stringsAsFactors = FALSE)
+fits <- readRDS("../output/rate_contrast_fits.rds")
+stopifnot(nrow(dat) == 42)
+
+CHAINS <- 4; ITER <- 4000; WARMUP <- 2000; SEED <- 2026
+CORES  <- min(CHAINS, parallel::detectCores())
+
+
+# ---- 1. Scaling and data sets, as in script 16 ----
+
+RESP <- c(ds = "med_logratio_ds", dn = "med_logratio_dn", w = "med_logratio_w")
+CONT <- c("d_loading", "age", "d_logmass")
+BIN  <- c("migration_pair", "flight_loss_pair")
+
+y_mean <- sapply(RESP, function(v) mean(dat[[v]]))
+y_sd   <- sapply(RESP, function(v) sd(dat[[v]]))
+x_mean <- sapply(CONT, function(v) mean(dat[[v]]))
+x_div  <- sapply(CONT, function(v) 2 * sd(dat[[v]]))
+
+scaled <- function(d) {
+  out <- d[, c("pair_id", "habit", BIN)]
+  for (r in names(RESP)) out[[r]] <- (d[[RESP[r]]] - y_mean[r]) / y_sd[r]
+  for (v in CONT) out[[v]] <- (d[[v]] - x_mean[v]) / x_div[v]
+  out
+}
+
+dat$overlap <- dat$migration_pair == 1 & dat$habit != "to migratory"
+sets <- list(
+  all          = dat,
+  drop_overlap = dat[!dat$overlap, ],
+  mig_vs_min   = dat[dat$habit %in% c("to migratory", "minimal"), ],
+  drop_aptfor  = dat[dat$pair_id != "APTFOR-PELURI-FV", ])
+stopifnot(sapply(sets, nrow) == c(42, 36, 30, 41))
+
+PRIORS <- c(prior(normal(0, 1), class = "b"),
+            prior(student_t(3, 0, 1), class = "Intercept"),
+            prior(lkj(2), class = "rescor"),
+            do.call(c, lapply(names(RESP), function(r)
+              set_prior("exponential(1)", class = "sigma", resp = r))))
+
+
+# ---- 2. Mass in place of the index, and LOO for all three models ----
+
+loo_tab <- list(); coef_tab <- list()
+
+for (s in names(sets)) {
+  d  <- scaled(sets[[s]])
+  tm <- c("d_logmass", "migration_pair", "flight_loss_pair", "age")
+  tm <- tm[sapply(tm, function(v) length(unique(d[[v]])) > 1)]
+  rhs  <- paste(tm, collapse = " + ")
+  form <- bf(as.formula(paste("ds ~", rhs))) + bf(as.formula(paste("dn ~", rhs))) +
+    bf(as.formula(paste("w ~", rhs))) + set_rescor(TRUE)
+  cat("==== fitting mass model for", s, "(n =", nrow(d), ") :", rhs, "\n")
+  fm <- brm(form, data = d, prior = PRIORS, chains = CHAINS, iter = ITER, warmup = WARMUP,
+            seed = SEED, cores = CORES, refresh = 0,
+            control = list(adapt_delta = 0.95, max_treedepth = 12))
+
+  s_dr <- summarise_draws(as_draws_df(fm), "rhat", "ess_bulk")
+  s_dr <- s_dr[!grepl("^lp__|^lprior", s_dr$variable), ]
+  np <- nuts_params(fm)
+  cat("  max Rhat", round(max(s_dr$rhat), 3), " min ESS", round(min(s_dr$ess_bulk)),
+      " divergent", sum(np$Value[np$Parameter == "divergent__"]), "\n")
+
+  dr <- as_draws_df(fm)
+  for (r in names(RESP)) {
+    b <- dr[[paste0("b_", r, "_d_logmass")]] * y_sd[r]      # per 2 SD of the mass contrast
+    q <- quantile(b, c(0.5, 0.025, 0.975))
+    coef_tab[[paste(s, r)]] <- data.frame(set = s, response = r, term = "d_logmass",
+      estimate_2sd = q[1], lower_2sd = q[2], upper_2sd = q[3],
+      estimate = q[1] / x_div["d_logmass"], lower = q[2] / x_div["d_logmass"],
+      upper = q[3] / x_div["d_logmass"], pd = max(mean(b > 0), mean(b < 0)),
+      row.names = NULL)
+  }
+
+  models <- list(loading = fits[[s]], mass = fm, both = fits[[paste0(s, "_mass")]])
+  stopifnot(all(sapply(models, inherits, "brmsfit")))
+  loos <- lapply(names(models), function(m) {
+    l <- loo(models[[m]], reloo = TRUE, k_threshold = 0.7)
+    cat("  ", m, ": elpd_loo", round(l$estimates["elpd_loo", 1], 2),
+        "  pairs refitted for k > 0.7:", sum(pareto_k_values(loo(models[[m]])) > 0.7), "\n")
+    l
+  })
+  names(loos) <- names(models)
+  cmp <- loo_compare(loos)
+  loo_tab[[s]] <- data.frame(set = s, n = nrow(d), model = rownames(cmp),
+    elpd_loo = cmp[, "elpd_loo"], se_elpd_loo = cmp[, "se_elpd_loo"],
+    elpd_diff = cmp[, "elpd_diff"], se_diff = cmp[, "se_diff"], row.names = NULL)
+  print(cmp, simplify = FALSE)
+}
+
+loo_tab <- do.call(rbind, loo_tab); coef_tab <- do.call(rbind, coef_tab)
+write.csv(loo_tab, "../output/mass_vs_loading_loo.csv", row.names = FALSE)
+write.csv(coef_tab, "../output/mass_vs_loading_coef.csv", row.names = FALSE)
+
+cat("\nLOO comparison (elpd_diff relative to the best model in each data set):\n\n")
+print(format(loo_tab, digits = 3), row.names = FALSE)
+cat("\nMass coefficient with the index absent (per 2 SD and per unit):\n\n")
+print(format(coef_tab, digits = 3), row.names = FALSE)
