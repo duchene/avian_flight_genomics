@@ -18,7 +18,7 @@
 #      ../output/hyphaeon_input/manifest.csv
 
 # The alignments are large and live outside the repository.
-ALN_DIR <- Sys.getenv("AUK_ALIGNMENTS", "~/Desktop/Research/auk/postshrink_alignments")
+ALN_DIR <- Sys.getenv("AUK_ALIGNMENTS", "../hpc/alignments")
 ALN_DIR <- path.expand(ALN_DIR)
 MIN_TAXA <- 20          # genes with fewer sequenced taxa carry little trait signal
 

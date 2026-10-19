@@ -41,8 +41,8 @@ aitchison_variance <- function(comp_matrix) {
 }
 
 # Get all FASTA files.
-# NOTE: c123 is a large external directory not included in the repository.
-alignment_dir <- "~/Desktop/Research/auk/c123"
+# NOTE: c123 is a large external directory not included in the repository. Set B10K_C123.
+alignment_dir <- Sys.getenv("B10K_C123", "../c123")
 alignment_dir <- path.expand(alignment_dir)
 fasta_files <- list.files(alignment_dir, pattern = "\\.fa$", full.names = TRUE)
 

@@ -2,8 +2,11 @@ library(phangorn)
 
 # Identify all B10K loci (coding regions) and taxa (sister pairs) to be used.
 
-loci <- grep("[.]fa", dir("c123/"), value = T)
-tax <- read.csv("~/Desktop/B10K_phase2/taxonomy_codes.csv", header = T, row.names = 1)
+# B10K_C123: the B10K coding-region alignments; B10K_TAXONOMY: the B10K taxonomy table.
+C123 <- Sys.getenv("B10K_C123", "c123")
+loci <- grep("[.]fa", dir(C123), value = T)
+tax <- read.csv(Sys.getenv("B10K_TAXONOMY", "../data/taxonomy_codes.csv"), header = T,
+                row.names = 1)
 taxa <- c("Rhea_pennata",
 "Tinamus_guttatus",
 "Anas_platyrhynchos",

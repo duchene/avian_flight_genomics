@@ -12,7 +12,7 @@
 #
 # PER-PAIR RANKING. For each pair, every gene is scored by ln(omega in the more
 # flight-capable sister / omega in its counterpart), oriented against the trait table
-# (sp1 is NOT always the lesser sister, see STATUS). The scores are rank-based
+# (sp1 is NOT always the lesser sister, see README, Pitfalls). The scores are rank-based
 # inverse-normal transformed within the pair. Two reasons. GSEA should describe which
 # sets sit at the extremes of the pair's own distribution, not the pair's genome-wide
 # shift, which scripts 16 and 20b already test. And the raw ratio has heavy tails from
@@ -91,7 +91,7 @@ lesser <- taxa$code[taxa$sister == "lesser"]
 contr$comparison <- sub("-[A-Z]{2}$", "", contr$pair_id)
 
 d <- sisdifggdnds
-d$comparison <- as.character(d$comparison)   # a FACTOR in the Rdata, see STATUS traps
+d$comparison <- as.character(d$comparison)   # a FACTOR in the Rdata, see README, Pitfalls
 stopifnot(setequal(unique(d$comparison), contr$comparison))
 # every pair must have exactly one lesser sister, or the orientation below is undefined
 chk <- unique(d[, c("comparison", "sp1", "sp2")])

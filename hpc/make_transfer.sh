@@ -7,7 +7,7 @@
 set -euo pipefail
 
 OUT=${1:-/tmp/auk_alignments.tar.gz}
-ALN=${AUK_ALIGNMENTS:-$HOME/Desktop/Research/auk/postshrink_alignments}
+ALN=${AUK_ALIGNMENTS:?set AUK_ALIGNMENTS to the folder of codon alignments}
 LIST=hpc/inputs/eligible_genes.txt
 [[ -f $LIST ]] || { echo "FATAL: $LIST missing. Run scripts/26_pelican_prep.Rscript first."; exit 1; }
 

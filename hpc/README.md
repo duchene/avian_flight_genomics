@@ -5,8 +5,21 @@ or covary with a continuous trait. It is the one resolution the rest of the anal
 not examine: a few sites under strong selection in a few genes move neither genome-wide nor
 gene-level omega.
 
-**Result: null for all three phenotypes.** No site and no gene reaches q < 0.10. The table
-and the interpretation are in `STATUS.md`; per-gene tables are in `results/summary/`.
+**Result: null for all three phenotypes.** No site and no gene reaches q < 0.10. Per-gene
+tables are in `results/summary/`.
+
+| | reduced flight (15 tips) | loading (continuous) | migration (29 tips) |
+|---|---|---|---|
+| genes | 9,890 eligible | 14,124 (>= 20 taxa) | 14,124 (>= 20 taxa) |
+| variable sites tested | 1.90M | 2.79M | 2.79M |
+| sites at BH q < 0.10 | 0 | 0 | 0 |
+| genes at q < 0.10 (Sidak within, BH across) | 0 | 0, best q 0.129 | 0 |
+| smallest site p | 1.2e-5 | 2.5e-7 | 8.8e-6 |
+| median p, fraction < 0.05 | 0.57, 0.034 | 0.45, 0.036 | 0.35, 0.024 |
+
+The near miss for loading, GALGAL_R08348 site 64, carries Asn in most low-loading taxa and
+Ser in nearly all high-loading ones, but the Asn taxa are largely passerines and their
+allies, so it reads as a single clade-level change.
 
 Every step is a Slurm job on the `DeiC-KU-L04` account. Nothing runs on the login node.
 

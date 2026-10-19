@@ -1,14 +1,13 @@
 cff-version: 1.2.0
 message: If you use this code, please cite the associated manuscript.
 title: >-
-  Analysis code for "Avian flight accelerates genome evolution and shapes
-  machineries for energy production"
+  Analysis code for "Migration by flight but not flight ability or loss accelerates molecular evolution in birds"
 abstract: >-
   Sister-pair comparative analysis of 42 avian sister pairs across 84 taxa and
-  roughly 14,800 protein-coding genes, testing whether changes in flight
-  behaviour drive molecular evolutionary rate acceleration and genome size
-  evolution. Replaces the categorical flight predictor of the previous version
-  with a continuous wing-loading index.
+  roughly 14,800 protein-coding genes, testing whether gains of migration, losses
+  of flight and a continuous wing-loading index are associated with shifts in
+  molecular evolutionary rates, genome architecture, amino acid preferences, and
+  selection on pathways within individual transitions.
 authors:
   - family-names: Duchene
     given-names: David A.
@@ -21,4 +20,5 @@ keywords:
   - comparative genomics
   - birds
   - flight
-  - genome size
+  - migration
+  - flight loss

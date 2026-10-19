@@ -47,7 +47,7 @@
 
 library(ape)
 
-ALN <- Sys.getenv("AUK_ALIGNMENTS", "~/Desktop/Research/auk/postshrink_alignments")
+ALN <- Sys.getenv("AUK_ALIGNMENTS", "../hpc/alignments")
 ALN <- path.expand(ALN)
 OUT <- "../output/pelican"      # large or derived, gitignored
 KIT <- "../hpc/inputs"          # small and deterministic, tracked so a clone carries it

@@ -76,9 +76,9 @@ hyphaeon phenotype \
   -o <output.json>  -c <output.csv>
 ```
 
-Our existing files work unchanged. Alignments and per-gene trees are at
-`~/Desktop/Research/auk/postshrink_alignments` (29,914 files, so about 14,957 genes, each
-`*.fasta` with a matching `*.fasta.treefile`). Taxon labels are the six-letter codes, which
+Our existing files work unchanged. Alignments and per-gene trees are in the folder named by
+`AUK_ALIGNMENTS` (29,914 files, so about 14,957 genes, each `*.fasta` with a matching
+`*.fasta.treefile`). Taxon labels are the six-letter codes, which
 match the `code` column of `output/traits_per_taxon.csv`. On the test gene it reported
 **100% taxon concordance, 76 shared taxa**, with no reformatting.
 
