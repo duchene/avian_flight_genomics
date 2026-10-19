@@ -1,6 +1,6 @@
 # avian_flight_genomics
 
-Scripts and data for the analysis in "Migration by flight but not flight ability or loss accelerates molecular evolution in birds",
+Scripts and data for the analysis in "The impact of transitions in flight habit on genomic evolution in birds",
 prepared for submission to Molecular Biology and Evolution. The manuscript text and figure
 code are in the companion repository `auk_ms`.
 

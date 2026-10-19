@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: If you use this code, please cite the associated manuscript.
 title: >-
-  Analysis code for "Migration by flight but not flight ability or loss accelerates molecular evolution in birds"
+  Analysis code for "The impact of transitions in flight habit on genomic evolution in birds"
 abstract: >-
   Sister-pair comparative analysis of 42 avian sister pairs across 84 taxa and
   roughly 14,800 protein-coding genes, testing whether gains of migration, losses
