@@ -1,0 +1,226 @@
+# 28_pair_footprints.Rscript
+#
+# Genomic footprints of individual transitions in flight habit, and the overlaps among
+# them. Builds on the per-pair GSEA of script 27.
+#
+# AIM. Script 27 asks whether shifts in omega recur across pairs more than chance allows,
+# and finds that they do not. That test is about consistency. This script is about
+# description: what each transition did to selection on pathways, and where the
+# footprints of separate transitions coincide in a way that plausibly reflects similar
+# adaptation. An overlap here is a lead to be judged on its biology, set against what
+# chance and the minimal-change pairs produce, not a claim of convergence.
+#
+# KEGG IS PRIMARY, GO A SENSITIVITY. KEGG pathways are organism-level mechanisms
+# (oxidative phosphorylation, cardiac muscle contraction, fatty acid degradation), which
+# is the level at which similar selective pressures are expected to act. The GO terms
+# available here are mostly generic functions and compartments, nested within one another,
+# so the same signal recurs under several names. KEGG disease and pathogen maps are kept
+# but flagged, since they are in practice immune gene sets.
+#
+# TWO TIERS OF OVERLAP. The same pathway can respond to the same selective pressure
+# through different genes in different lineages, so shared genes are not required.
+#   Tier 1, shared pathway. Nominal p < 0.05 within the pair, accelerated in the focal
+#     sister (the migratory sister, or the sister with reduced flight), in at least two
+#     pairs of a group; more pairs in the focal than in the opposite direction; and a
+#     larger share of the group's pairs than of the minimal-change pairs in either
+#     direction.
+#   Tier 2, shared pathway and shared genes. Tier 1, plus more genes in the leading edge
+#     of two or more of those pairs than expected if each pair drew its leading edge
+#     independently from the set.
+#
+# CHANCE. Each Tier 1 set carries the probability of at least that many focal hits given
+# each pair's own rate of focal hits (a Poisson-binomial tail), as a per-set guide. The
+# number of sets reaching k focal hits in a group is compared with its exact sign-flip
+# distribution, the same null as script 27, so a figure of overlaps can show next to it
+# how many such overlaps chance produces.
+#
+# Requires: none beyond base R
+# In:  ../output/pair_gsea.csv (script 27), ../output/traits_contrasts.csv,
+#      ../data/galgal_refseq_map.csv
+# Out: ../output/footprint_sets.csv, ../output/footprint_hits.csv,
+#      ../output/footprint_genes.csv, ../output/footprint_portraits.csv,
+#      ../output/footprint_null.csv
+
+P_HIT  <- 0.05
+K_NULL <- 2:4
+N_TOP  <- 3        # sets per sister in the portraits
+
+pg    <- read.csv("../output/pair_gsea.csv", stringsAsFactors = FALSE)
+contr <- read.csv("../output/traits_contrasts.csv", stringsAsFactors = FALSE)
+sym   <- read.csv("../data/galgal_refseq_map.csv", stringsAsFactors = FALSE)
+sym   <- setNames(sym$symbol, sym$gene)
+contr$comparison <- sub("-[A-Z]{2}$", "", contr$pair_id)
+
+PATHOGEN <- "infection|Influenza|[Vv]irus|Virion|Viral life|Salmonella|Bacterial invasion"
+pg$pathogen_map <- pg$collection == "KEGG" & grepl(PATHOGEN, pg$name)
+
+
+# ---- 1. Groups and the focal sister ----
+#
+# As in script 27. The migratory sister is the more flight-capable one, the sister with
+# reduced flight the less capable one, so focal = sign * sign(NES). Minimal pairs carry no
+# hypothesis and are oriented to the more flight-capable sister for reference only.
+
+reduced <- contr$habit %in% c("toward flight loss", "toward limited flight")
+contr$group <- ifelse(contr$habit == "to migratory", "migration",
+               ifelse(reduced, "reduction", "minimal"))
+contr$sign  <- ifelse(contr$group == "reduction", -1, 1)
+contr$focal_sp   <- ifelse(contr$sign > 0, contr$sp_greater, contr$sp_lesser)
+contr$counter_sp <- ifelse(contr$sign > 0, contr$sp_lesser, contr$sp_greater)
+stopifnot(all(contr$migration_pair[contr$group == "migration"] == 1),
+          all(contr$d_loading[contr$group == "reduction"] < 0))
+
+pg <- merge(pg, contr[, c("comparison", "group", "sign", "focal_sp", "counter_sp")],
+            by = "comparison")
+pg$hit <- ifelse(pg$p < P_HIT, sign(pg$NES) * pg$sign, 0)   # +1 focal, -1 counterpart
+pg$accelerated_in_focal <- sign(pg$NES) * pg$sign > 0
+write.csv(pg[pg$hit != 0, c("collection", "set", "name", "pathogen_map", "pair_id",
+                            "comparison", "habit", "group", "focal_sp", "counter_sp",
+                            "accelerated_in", "accelerated_in_focal", "NES", "p", "q",
+                            "size", "leading_edge")],
+          "../output/footprint_hits.csv", row.names = FALSE)
+
+
+# ---- 2. Tier 1: shared pathway ----
+
+# P(at least k successes) for independent trials with probabilities pr
+pb_tail <- function(pr, k) {
+  if (k <= 0) return(1)
+  d <- 1
+  for (x in pr) d <- c(d * (1 - x), 0) + c(0, d * x)
+  sum(d[(k + 1):length(d)])
+}
+
+# each pair's own rate of focal hits, within each collection
+pg$focal_hit <- pg$hit == 1
+rate <- aggregate(focal_hit ~ collection + comparison, pg, mean)
+rate <- setNames(rate$focal_hit, paste(rate$collection, rate$comparison))
+
+sets <- do.call(rbind, lapply(split(pg, list(pg$collection, pg$set), drop = TRUE),
+  function(v) {
+    out <- lapply(c("migration", "reduction"), function(g) {
+      w <- v[v$group == g, ]
+      m <- v[v$group == "minimal", ]
+      if (!nrow(w)) return(NULL)
+      nf <- sum(w$hit == 1); nc <- sum(w$hit == -1)
+      data.frame(
+        collection = v$collection[1], set = v$set[1], name = v$name[1],
+        pathogen_map = v$pathogen_map[1], group = g,
+        n_tested = nrow(w), n_focal = nf, n_counter = nc,
+        focal_pairs = paste(w$pair_id[w$hit == 1], collapse = ";"),
+        p_chance = pb_tail(rate[paste(w$collection, w$comparison)], nf),
+        n_minimal_tested = nrow(m),
+        n_minimal_greater = sum(m$hit == 1), n_minimal_lesser = sum(m$hit == -1),
+        stringsAsFactors = FALSE)
+    })
+    do.call(rbind, out)
+  }))
+min_share <- with(sets, pmax(n_minimal_greater, n_minimal_lesser) / pmax(n_minimal_tested, 1))
+sets$tier1 <- with(sets, n_focal >= 2 & n_focal > n_counter &
+                         n_focal / n_tested > min_share)
+
+
+# ---- 3. Tier 2: shared leading-edge genes ----
+#
+# For a Tier 1 set, the genes in the leading edge of two or more of its focal pairs,
+# against the number expected if each pair's leading edge were an independent draw of its
+# size from the set. Approximate: set membership differs slightly between pairs with gene
+# coverage, so the set size is the median across those pairs.
+
+le_split <- function(x) strsplit(x, ";", fixed = TRUE)
+genes <- list()
+sets$n_shared_genes <- NA_integer_
+sets$expected_shared <- NA_real_
+sets$p_shared <- NA_real_
+sets$shared_genes <- ""
+for (i in which(sets$tier1)) {
+  s <- sets[i, ]
+  w <- pg[pg$collection == s$collection & pg$set == s$set & pg$group == s$group &
+          pg$hit == 1, ]
+  le <- setNames(le_split(w$leading_edge), w$pair_id)
+  tab <- table(unlist(le))
+  q <- lengths(le) / w$size
+  S <- median(w$size)
+  ex <- S * pb_tail(q, 2)
+  sh <- names(tab)[tab >= 2]
+  sets$n_shared_genes[i] <- length(sh)
+  sets$expected_shared[i] <- ex
+  sets$p_shared[i] <- ppois(length(sh) - 1, ex, lower.tail = FALSE)
+  lab <- ifelse(is.na(sym[sh]) | sym[sh] == "", sh, sym[sh])
+  sets$shared_genes[i] <- paste(lab[order(-tab[sh])], collapse = ";")
+  g <- names(tab)
+  genes[[length(genes) + 1]] <- data.frame(
+    collection = s$collection, group = s$group, set = s$set, name = s$name,
+    gene = g, symbol = unname(ifelse(is.na(sym[g]) | sym[g] == "", NA, sym[g])),
+    n_pairs = as.integer(tab[g]),
+    pairs = vapply(g, function(x) paste(names(le)[vapply(le, function(l) x %in% l, TRUE)],
+                                        collapse = ";"), ""),
+    stringsAsFactors = FALSE, row.names = NULL)
+}
+sets$tier2 <- sets$tier1 & !is.na(sets$p_shared) & sets$p_shared < 0.05 &
+              sets$n_shared_genes >= 2
+sets$tier <- ifelse(sets$tier2, 2L, ifelse(sets$tier1, 1L, 0L))
+sets <- sets[order(sets$collection, sets$group, -sets$tier, sets$p_chance), ]
+write.csv(sets, "../output/footprint_sets.csv", row.names = FALSE)
+genes <- do.call(rbind, genes)
+write.csv(genes[order(genes$collection, genes$group, genes$set, -genes$n_pairs), ],
+          "../output/footprint_genes.csv", row.names = FALSE)
+
+
+# ---- 4. How many overlaps does chance produce? ----
+#
+# Per group and collection, the number of sets with at least k focal hits and more focal
+# than opposite hits, against every flip of pair orientation.
+
+nul <- list()
+for (cl in unique(pg$collection)) for (g in c("migration", "reduction", "minimal")) {
+  v <- pg[pg$collection == cl & pg$group == g, ]
+  H <- tapply(v$hit, list(v$set, v$comparison), sum)
+  H[is.na(H)] <- 0
+  n <- ncol(H)
+  F <- t(as.matrix(expand.grid(rep(list(c(1, -1)), n))))
+  stopifnot(all(F[, 1] == 1))
+  P <- (H == 1) * 1; N <- (H == -1) * 1
+  nf <- P %*% (F == 1) + N %*% (F == -1)
+  nc <- P %*% (F == -1) + N %*% (F == 1)
+  for (k in K_NULL) {
+    cnt <- colSums(nf >= k & nf > nc)
+    nul[[length(nul) + 1]] <- data.frame(
+      collection = cl, group = g, k = k, pairs = n, sets = nrow(H), observed = cnt[1],
+      null_mean = mean(cnt), null_lo = unname(quantile(cnt, 0.025)),
+      null_hi = unname(quantile(cnt, 0.975)), p = mean(cnt >= cnt[1]))
+  }
+}
+nul <- do.call(rbind, nul)
+write.csv(nul, "../output/footprint_null.csv", row.names = FALSE)
+
+
+# ---- 5. Portraits of each transition ----
+
+port <- do.call(rbind, lapply(split(pg, list(pg$collection, pg$comparison), drop = TRUE),
+  function(v) {
+    up <- head(v[v$NES > 0, ][order(v$p[v$NES > 0]), ], N_TOP)
+    dn <- head(v[v$NES < 0, ][order(v$p[v$NES < 0]), ], N_TOP)
+    rbind(up, dn)[, c("collection", "pair_id", "habit", "group", "focal_sp",
+                      "counter_sp", "accelerated_in", "accelerated_in_focal", "name",
+                      "pathogen_map", "NES", "p", "q", "size")]
+  }))
+write.csv(port, "../output/footprint_portraits.csv", row.names = FALSE)
+
+
+# ---- 6. Report ----
+
+cat("Overlaps against the sign-flip null (sets with >= k focal hits)\n\n")
+print(format(nul, digits = 3), row.names = FALSE)
+for (cl in c("KEGG", "GO")) {
+  cat("\n", cl, ": Tier 1 and Tier 2 sets\n", sep = "")
+  s <- sets[sets$collection == cl & sets$tier1, c("group", "name", "tier", "n_tested",
+            "n_focal", "n_counter", "n_minimal_greater", "n_minimal_lesser",
+            "p_chance", "n_shared_genes", "expected_shared", "p_shared")]
+  if (nrow(s)) print(format(s, digits = 2), row.names = FALSE) else cat("  none\n")
+}
+cat("\nShared leading-edge genes, Tier 1 KEGG sets\n")
+s <- sets[sets$collection == "KEGG" & sets$tier1 & sets$n_shared_genes > 0, ]
+for (i in seq_len(nrow(s)))
+  cat(sprintf("  %-9s %-40s %s\n", s$group[i], substr(s$name[i], 1, 40),
+              substr(s$shared_genes[i], 1, 110)))

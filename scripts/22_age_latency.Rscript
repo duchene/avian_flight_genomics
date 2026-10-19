@@ -141,9 +141,9 @@ for (y in responses) {
 }
 cat("\n    f is the fraction of the branch elapsed before the transition began.\n")
 cat("    f = 0 means the trait changed at divergence, f = 0.9 means very recently.\n")
-cat("    Where no f is compatible, the age relationship is not trait-generated at any\n")
-cat("    latency, which analysis (b) corroborates by locating the age effect in the\n")
-cat("    minimal-change pairs rather than in the pairs that changed.\n")
+cat("    Where no f is compatible, the trait model cannot reproduce the observed age\n")
+cat("    relationship at any latency. Read this alongside analysis (b), which compares\n")
+cat("    the age slopes of minimal-change and changed pairs directly.\n")
 
 
 # ---- Figure ----

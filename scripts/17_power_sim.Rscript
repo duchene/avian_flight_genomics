@@ -15,7 +15,7 @@
 # Requires: none beyond base R
 # In:  ../output/traits_contrasts.csv, ../output/traits_per_taxon.csv,
 #      ../data/dnds_sisdifs_vol.Rdata
-# Out: ../output/power_curves.csv, ../figures/FigS_power.pdf
+# Out: ../output/power_curves.csv, ../figures/FigS2_power.pdf
 
 set.seed(42)
 N_GENES_NOISE <- 400     # genes sampled to measure realistic residual noise
@@ -139,7 +139,7 @@ cat("most influential pair:", names(which.max(abs(loo - full))), "\n")
 
 # ---- 4. Figure ----
 
-pdf("../figures/FigS_power.pdf", width = 9, height = 4.2)
+pdf("../figures/FigS2_power.pdf", width = 9, height = 4.2)
 par(mfrow = c(1, 2), mar = c(4.2, 4.4, 2.6, 1), tcl = -0.25, mgp = c(2.5, 0.5, 0),
     cex.axis = 0.85)
 
@@ -167,4 +167,4 @@ legend("topright", bty = "n", cex = 0.75, lwd = 2.2, col = "#D1793B", seg.len = 
 box(bty = "l", col = "grey45")
 
 dev.off()
-cat("\nwritten ../figures/FigS_power.pdf\n")
+cat("\nwritten ../figures/FigS2_power.pdf\n")

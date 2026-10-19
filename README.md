@@ -75,9 +75,11 @@ the spreadsheet.
 | `21_gsea` | run | GSEA on the continuous signed statistic, no threshold cut |
 | `22_age_latency` | run, 2 s | Pair age and trait interaction, minimal-change baseline, latency simulation |
 | `23_mrpmm` | run, 9.2 h per fit | Multi-response phylogenetic mixed model. Four specifications, see below |
-| `24_fig_genomewide` | run | Figure 6, the genome-wide excess against a permutation null |
+| `24_fig_genomewide` | run | Figure 3, the genome-wide excess against a permutation null |
 | `25_mrpmm_compare` | run | Compares the four MR-PMM fits and labels each correlation |
 | `26_pelican_prep` | run, 3 min | Inputs for the per-site PELICAN screen |
+| `27_pair_gsea` | run, 4 min | GSEA on omega within each pair, and three tests of whether the shifts recur across pairs sharing a change in flight habit. Null. Job script `hpc/kegg/27_pair_gsea.sh` |
+| `28_pair_footprints` | run, 10 s | Describes each transition's KEGG footprint and the pathways shared across pairs (Tier 1, shared pathway; Tier 2, shared genes), with chance and sign-flip references. Drawn as `auk_ms` Figure 4 |
 | `hpc/` | run on GenomeDK, ~720 core-hours | PELICAN per-site screen, three phenotypes. Null |
 
 ### Not carried forward
@@ -241,6 +243,13 @@ Two rules are needed, both established by inspection and both implemented in `23
 
 Together these recover 83 of 84. Only *Pinguinus* is absent, correctly, since it is not a
 B10K genome.
+
+## Figure names
+
+Figures carry the manuscript's numbering: `Fig1` to `Fig5` are main figures and `FigS2` to
+`FigS7` supplementary figures. `FigX_` marks working figures that are not in the manuscript.
+Figure 4 and supplementary figure S5 are drawn in the manuscript repository from the outputs
+of scripts 27 and 28.
 
 ## Reproducing this
 

@@ -228,7 +228,7 @@ env_df <- do.call(rbind, lapply(keys, function(k) {
              direction = pk$direction, stringsAsFactors = FALSE)
 }))
 
-# Factor levels (Decel on top to match original Figure 1 layout)
+# Factor levels (Decel on top to match Figure 1 of the previous submission)
 rate_lev <- c("ds", "dn", "dnds")
 rate_lab <- c(ds = "dS", dn = "dN", dnds = "dN/dS")
 cat_lev  <- c("fless", "similar", "sm")
@@ -348,7 +348,7 @@ print(fig_forest)
 dev.off()
 cat("Figure saved: ../figures/Fig_S_ks_D_forest.pdf\n")
 
-# ---- 11. Base-R version of Figure 1 with permutation envelopes ----
+# ---- 11. Base-R version of the previous submission's Figure 1 with permutation envelopes ----
 # Matches the original layout from 09_binomtests.Rscript for direct comparison.
 
 line_cols <- c(fless = "#3c1b4dff", similar = "#90d743ff", sm = "#DAA520ff")

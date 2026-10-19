@@ -80,7 +80,7 @@
 # In:  ../output/traits_per_taxon.csv, ../data/dnds_branches.Rdata,
 #      ../data/dated.auk.tre, ../data/Feng_Table_1.csv
 # Out: ../output/mrpmm_fit.Rdata, ../output/mrpmm_correlations.csv,
-#      ../output/mrpmm_diagnostics.csv, ../figures/Fig3_mrpmm.pdf
+#      ../output/mrpmm_diagnostics.csv, ../figures/FigS6_mrpmm.pdf
 
 library(brms)
 library(ape)
@@ -442,7 +442,7 @@ cor_matrix <- function(prefix) {
 Mp <- cor_matrix("cor_phylo__")
 Mr <- if (RESCOR) cor_matrix("rescor__") else NULL
 
-pdf(paste0("../figures/Fig3_mrpmm", SUF, ".pdf"), width = 11, height = 5.4)
+pdf(paste0("../figures/FigS6_mrpmm", SUF, ".pdf"), width = 11, height = 5.4)
 par(mfrow = c(1, 2), mar = c(7.5, 7.5, 3, 2))
 ramp <- colorRampPalette(c("#2B6B8F", "white", "#C4622D"))(101)
 show_mat <- function(M, main) {
@@ -460,4 +460,4 @@ if (!is.null(Mr)) show_mat(Mr, "Residual correlation") else {
   plot.new(); text(0.5, 0.5, "residual correlation\nnot estimated\n(set_rescor FALSE)",
                    cex = 0.95, col = "grey35") }
 dev.off()
-cat("\nwritten", paste0("../figures/Fig3_mrpmm", SUF, ".pdf"), "\n")
+cat("\nwritten", paste0("../figures/FigS6_mrpmm", SUF, ".pdf"), "\n")

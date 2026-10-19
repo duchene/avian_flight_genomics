@@ -28,7 +28,7 @@
 # In:  ../output/contrast_screen.csv, ../output/rate_contrasts.csv,
 #      ../output/traits_contrasts.csv, ../output/traits_per_taxon.csv,
 #      ../data/dnds_sisdifs_vol.Rdata
-# Out: ../figures/Fig6_genomewide.pdf
+# Out: ../figures/Fig3_genomewide.pdf
 
 set.seed(42)
 N_PERM <- 200
@@ -113,7 +113,7 @@ for (nm in names(MATS)) cat("  ", nm, ": ", nrow(MATS[[nm]]), " genes\n", sep = 
 
 # ---- 2. Figure ----
 
-pdf("../figures/Fig6_genomewide.pdf", width = 11, height = 9.5)
+pdf("../figures/Fig3_genomewide.pdf", width = 11, height = 9.5)
 layout(matrix(1:9, nrow = 3, byrow = TRUE))
 par(mar = c(4.2, 4.6, 3, 1), tcl = -0.25, mgp = c(2.6, 0.5, 0), cex.axis = 0.85)
 
@@ -215,6 +215,6 @@ for (rt in names(RATES)) {
 }
 
 dev.off()
-cat("\nwritten ../figures/Fig6_genomewide.pdf\n")
+cat("\nwritten ../figures/Fig3_genomewide.pdf\n")
 cat("Row 1 shows the shift, row 2 shows it exceeds a permutation null and that the\n")
 cat("other screens are calibrated, row 3 shows the aggregate test that is significant.\n")

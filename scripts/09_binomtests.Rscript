@@ -65,7 +65,7 @@ colnames(pvalsperloc) <- c(paste0("ds_", cat_suffixes),
 save(pvalsperloc, file = "../data/p_values_per_locus.Rdata")
 
 
-# ---- 3. Figure 1: Cumulative p-value distributions ----
+# ---- 3. Figure 1 of the previous submission: cumulative p-value distributions ----
 #
 # Each panel shows ECDFs for fless (purple), similar (green), SM (yellow).
 # Column offsets from the fless column index: -6 = similar, -2 = SM.

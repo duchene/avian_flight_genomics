@@ -113,11 +113,16 @@ flight index sits at the nominal rate, that is, no signal.
 **17, power.** 80% power needs rho = 0.41 for a single gene, **0.55 inside a BH-controlled
 screen of 14,785**. A null in the screen must be read against that bound.
 
-**22, age.** The age-by-trait interaction is null for every rate type (p = 0.68, 0.99,
-0.18). The age effect sits in the minimal-change pairs (dN slope p = 0.023) and is absent
-from pairs that changed (p = 0.99). The latency simulation cannot generate the observed
-age correlation at any latency for dN or omega. **The previous paper's reading of its
-Figure 3 does not survive.** The age relationship is elapsed time, not trait effect.
+**22, age.** Rechecked 19 October 2026 on the current `rate_contrasts.csv`; the numbers
+first recorded here predated the factor-indexing fix and had the groups the wrong way
+round. The absolute median log ratio grows with pair age in the 27 pairs that changed
+flight habit (dS slope 0.0054 per Myr, p = 0.001; dN 0.0041, p = 0.026; omega p = 0.33)
+and not detectably in the 15 minimal-change pairs (dS p = 0.13, dN p = 0.20, omega
+p = 0.92), as the manuscript states. The two slopes do not differ from each other
+(age-by-changed interaction p = 0.53 for dS, 0.81 for dN), so the contrast between groups
+is one of detection rather than a demonstrated difference in slope. The age-by-loading
+interaction is null (p = 0.74, 0.66, 0.86). The closing printout of script 22 no longer
+claims the age effect sits in the minimal-change pairs.
 
 **Variable audit for script 23** (per taxon, n = 83):
 
@@ -170,7 +175,7 @@ pinned at the floor.
 **Version 2 is kept as evidence**, by decision, under the `*_rescor` suffix:
 `output/mrpmm_fit_rescor.Rdata`, `mrpmm_correlations_rescor.csv`,
 `mrpmm_diagnostics_rescor.csv`, `mrpmm_rescor_run.log`,
-`figures/Fig3_mrpmm_rescor.pdf`. Reproduce with `MRPMM_RESCOR=TRUE`.
+`figures/FigS6_mrpmm_rescor.pdf`. Reproduce with `MRPMM_RESCOR=TRUE`.
 
 Version 3 drops `set_rescor`, removing 21 parameters the data cannot supply. The cost,
 which belongs in the paper rather than buried in a comment, is that the split between
@@ -441,7 +446,7 @@ best GO set plasma membrane, q 0.101; best KEGG pathways all at q 0.633.
 
 **On GenomeDK the comparator and HyphAeon rankings are absent** (`rer_comparator.csv`,
 `per_gene_statistics.csv` live on the Mac), so a GO run there drops them from
-`figures/Fig4_gsea.pdf`. The committed Fig4 was drawn with them; do not commit a
+`figures/FigX_gsea.pdf`. The committed FigX_gsea was drawn with them; do not commit a
 cluster-drawn Fig4 unless those files have been copied over.
 
 ### MR-PMM credible intervals, and one correction to the manuscript
@@ -532,3 +537,63 @@ sets (dS -0.23 to -0.28 per 2 SD, dN -0.18 to -0.23, all credible). Omega is wea
 positive (about +0.05 per 2 SD), credible in three of four sets. The manuscript text is
 left to David. Outputs: `output/mass_vs_loading_loo.csv`, `output/mass_vs_loading_coef.csv`.
 Job script `dduchene/jobs/run16b_mass_vs_loading.sh`, 2005 s on 4 cores.
+
+## Added 19 October 2026
+
+### Per-pair GSEA on omega (27), null
+
+`scripts/27_pair_gsea.Rscript`, run by `hpc/kegg/27_pair_gsea.sh` (4 min, 4 cores). Asks
+which pathways carry the largest change in selection within each pair, in which sister,
+and whether the same pathways recur across pairs sharing a change in flight habit.
+
+Each pair's genes are ranked by ln(omega greater / omega lesser), oriented against the
+trait table and rank-inverse-normal transformed within the pair, so NES describes sets
+relative to the pair's own genome rather than its genome-wide shift. fgsea on GO (389 sets
+in bounds) and KEGG (177). Median 7,033 genes per pair; PINIMP-ALCTOR has only 1,222,
+because the pair is 3.9 Myr old and many genes have dS near zero, so only 38 GO sets are
+testable there and its sets should not be read individually.
+
+Groups, with the focal sister the one carrying the change: migration (15 "to migratory"),
+reduction (12, lost or limited flight; 6 also gain migration), minimal (15, reference),
+and sensitivities migration_all (21) and flight_loss (7).
+
+| test | result |
+|---|---|
+| sets at q < 0.05 within a pair | 0 to 2 per pair, the same in minimal pairs as in focal pairs |
+| directional convergence per set (exact sign-flip) | no set at q < 0.05 in any group |
+| omnibus, sets at p < 0.05 against sign-flips | migration 2 and 8 (GO, KEGG; null mean 8.0, 7.3); reduction 10 and 7 (8.3, 7.4); minimal 10 and 10; all p >= 0.14 |
+| gene-level correlation between pairs of a group | mean r 0.001 to 0.003, p >= 0.10 |
+| set shifts larger than in minimal pairs | none; best KEGG reduction, p = 0.076 |
+
+**Trap.** A one-sample t test of NES across 5 to 7 pairs is badly overconfident. The first
+run used it and returned 12 flight-loss sets at q < 0.05 (ribosome, myosin, chromatin
+remodelling), every one with all pairs the same sign. The exact sign-flip p cannot go below
+2 / 2^n, 0.0625 for five pairs, and all twelve vanish under it. The parametric p is kept in
+`pair_gsea_convergence.csv` as `p_t` for the record only.
+
+Reading: the changes in selection within each pair do not concentrate in shared pathways
+or shared genes across pairs with the same change in flight habit, which agrees with the
+lineage-specific reading of flight loss in the manuscript.
+
+### Footprints of individual transitions (28), KEGG primary, GO supplementary
+
+`scripts/28_pair_footprints.Rscript` reads `pair_gsea.csv` and describes rather than tests:
+which KEGG pathways each transition accelerated in omega, in which sister, and where the
+footprints of separate transitions coincide. Decided with David: KEGG primary (pathways are
+the level at which similar selection is expected to act), GO as a supplementary
+sensitivity, and shared genes are NOT required, since the same pathway can respond through
+different genes in different lineages.
+
+Tier 1 (nominal p < 0.05 in the focal sister in >= 2 pairs, more focal than opposite hits,
+and a larger share than in minimal pairs in either direction): 11 KEGG pathways for
+migration, 10 for reduced flight. The strongest, each in 3 pairs with a chance probability
+of about 0.015 given each pair's hit rate: GnRH signalling and melanogenesis in migrants;
+cytoskeleton in muscle cells (kagu, emperor penguin, logrunner; no minimal pair) and
+arachidonic acid metabolism (mesite, flightless cormorant, tapaculo) in flight-reduced
+sisters. Tier 2 (more shared leading-edge genes than expected): none, so the overlaps are
+pathway-level, through partly different genes. The number of overlapping pathways sits
+inside the sign-flip null for every group (`footprint_null.csv`), consistent with script
+27. Present the overlaps as leads with the null alongside, never as convergence.
+
+Figure 4 of the manuscript: `auk_ms/figure_code/fig4_footprints.R`, drawn with this repo's pixi R and
+`AFG` pointing here. Portrait pairs are set by `PORTRAITS`.

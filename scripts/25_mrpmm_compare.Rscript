@@ -69,7 +69,7 @@
 # Requires: brms
 # In:  ../output/mrpmm_fit_norescor*.Rdata
 # Out: ../output/mrpmm_variant_comparison.csv, ../output/mrpmm_variant_convergence.csv,
-#      ../figures/Fig3b_mrpmm_variants.pdf
+#      ../figures/FigS6b_mrpmm_variants.pdf
 
 suppressMessages(library(brms))
 
@@ -224,7 +224,7 @@ pl$off <- (match(pl$key, variants$key) - (nrow(variants) + 1) / 2) * 0.16
 pal <- c("#0072B2", "#E69F00", "#009E73", "#CC79A7")[seq_len(nrow(variants))]
 names(pal) <- variants$key
 
-pdf("../figures/Fig3b_mrpmm_variants.pdf", width = 9.5, height = 0.42 * length(sel) + 2.2)
+pdf("../figures/FigS6b_mrpmm_variants.pdf", width = 9.5, height = 0.42 * length(sel) + 2.2)
 par(mar = c(4.2, 15.5, 2.6, 1), tcl = -0.25, mgp = c(2.3, 0.5, 0))
 plot(NA, xlim = c(-1, 1), ylim = c(0.5, length(sel) + 0.5), axes = FALSE,
      xlab = "phylogenetic correlation", ylab = "",
@@ -245,6 +245,6 @@ legend("topleft", inset = c(0, -0.02), bty = "n", cex = 0.72, horiz = FALSE,
        lwd = 2.4, col = pal, legend = variants$label)
 box(bty = "l", col = "grey45")
 dev.off()
-cat("\nwritten ../figures/Fig3b_mrpmm_variants.pdf\n")
+cat("\nwritten ../figures/FigS6b_mrpmm_variants.pdf\n")
 cat("written ../output/mrpmm_variant_comparison.csv\n")
 cat("written ../output/mrpmm_variant_convergence.csv\n")

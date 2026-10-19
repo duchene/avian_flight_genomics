@@ -41,7 +41,7 @@
 # Requires: clusterProfiler (Bioconductor). fgsea alone would also serve.
 # In:  ../output/contrast_screen.csv, and where present ../output/per_gene_statistics.csv
 #      and ../output/rer_comparator.csv; ../data/goterms.csv or ../data/kegg_sets.csv
-# Out: ../output/gsea_results{,_kegg}.csv, ../figures/Fig4_gsea{,_kegg}.pdf
+# Out: ../output/gsea_results{,_kegg}.csv, ../figures/FigX_gsea{,_kegg}.pdf
 
 suppressMessages(library(clusterProfiler))
 
@@ -196,7 +196,7 @@ cat(strrep("=", 78), "\n")
 
 # ---- 4. Figure ----
 
-pdf(paste0("../figures/Fig4_gsea", SUF, ".pdf"), width = 10, height = 6)
+pdf(paste0("../figures/FigX_gsea", SUF, ".pdf"), width = 10, height = 6)
 all_res <- all_res[all_res$interpretable, ]
 if (!nrow(all_res)) { dev.off(); cat("\nno interpretable ranking available\n"); quit(save="no") }
 phs <- unique(all_res$phenotype)
@@ -218,5 +218,5 @@ for (ph in phs) {
   box(bty = "l", col = "grey45")
 }
 dev.off()
-cat("\nwritten ../figures/Fig4_gsea", SUF, ".pdf\n", sep = "")
+cat("\nwritten ../figures/FigX_gsea", SUF, ".pdf\n", sep = "")
 cat("orange bars pass q <", QCUT, "; grey bars do not\n")

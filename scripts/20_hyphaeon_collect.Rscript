@@ -36,7 +36,7 @@
 # Out: ../output/per_gene_statistics.csv
 #      ../output/hyphaeon_base_composition_check.csv
 #      ../output/rer_comparator.csv
-#      ../figures/FigS_hyphaeon_qc.pdf
+#      ../figures/FigS4_hyphaeon_qc.pdf
 
 library(jsonlite)
 
@@ -235,7 +235,7 @@ if (!is.null(cmp)) {
 
 # ---- 4. QC figure ----
 
-pdf("../figures/FigS_hyphaeon_qc.pdf", width = 10, height = 6.5)
+pdf("../figures/FigS4_hyphaeon_qc.pdf", width = 10, height = 6.5)
 par(mfrow = c(2, 3), mar = c(4.2, 4.4, 2.8, 1), tcl = -0.25, mgp = c(2.5, 0.5, 0),
     cex.axis = 0.85)
 for (ph in unique(res$phenotype)) {
@@ -263,5 +263,5 @@ for (ph in unique(res$phenotype)) {
   box(bty = "l", col = "grey45")
 }
 dev.off()
-cat("\nwritten ../figures/FigS_hyphaeon_qc.pdf\n")
+cat("\nwritten ../figures/FigS4_hyphaeon_qc.pdf\n")
 cat("next: scripts/21_gsea.Rscript, ranking on the comparator (see centring table above)\n")

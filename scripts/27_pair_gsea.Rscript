@@ -1,0 +1,390 @@
+# 27_pair_gsea.Rscript
+#
+# Gene-set enrichment within each sister pair, on omega, and tests of whether the shifts
+# recur across pairs that share a change in flight habit.
+#
+# QUESTION. Scripts 16, 20b and 21 ask whether a change in flight habit shifts omega in a
+# consistent direction across all pairs, and find no genome-wide shift and no enriched
+# set. That design pools pairs before asking which pathways moved. Here each pair is
+# analysed on its own first: which pathways show the largest change in selection between
+# the two sisters, which sister they are accelerated in, and only then whether the same
+# pathways recur across pairs.
+#
+# PER-PAIR RANKING. For each pair, every gene is scored by ln(omega in the more
+# flight-capable sister / omega in its counterpart), oriented against the trait table
+# (sp1 is NOT always the lesser sister, see STATUS). The scores are rank-based
+# inverse-normal transformed within the pair. Two reasons. GSEA should describe which
+# sets sit at the extremes of the pair's own distribution, not the pair's genome-wide
+# shift, which scripts 16 and 20b already test. And the raw ratio has heavy tails from
+# genes with very small dS, which would otherwise dominate the weighted enrichment score.
+# A positive NES therefore means the set is accelerated in omega in the more
+# flight-capable sister RELATIVE TO THE REST OF ITS GENOME, and a negative NES means the
+# set is accelerated in the less flight-capable sister.
+#
+# GROUPS AND THE FOCAL SISTER. The focal sister is the one carrying the change:
+#   migration  15 "to migratory" pairs; focal = migratory sister = more flight-capable
+#   reduction  12 pairs toward flight loss (7) or limited flight (5); focal = the sister
+#              with reduced flight = less flight-capable. Six of these also carry a gain
+#              of migration in the other sister, so the two axes cannot be separated there.
+#   minimal    15 pairs with minimal change, the reference. Their orientation follows the
+#              trait table but carries no hypothesis.
+# Sensitivities: migration over all 21 pairs with a gain of migration, and flight loss
+# alone over its 7 pairs.
+# Focal NES = NES oriented so that positive means the set is accelerated in the focal
+# sister.
+#
+# THREE TESTS OF RECURRENCE, all with nulls that respect the independence of pairs.
+#  1. Directional convergence per set. One-sample t test of focal NES across the group's
+#     pairs, with its p-value taken from the exact sign-flip distribution of t rather than
+#     from the t distribution. With 5 to 7 pairs the parametric p is badly overconfident:
+#     five same-signed NES give t-test p near 0.001, whereas only 2 of the 32 orientations
+#     are as extreme, p = 0.0625. The sign-flip p therefore also carries a resolution
+#     floor of 2 / 2^n, reported per group. The omnibus asks whether more sets reach
+#     sign-flip p < 0.05 than expected, against the
+#     exact sign-flip distribution: under the null, which sister of a pair carries the
+#     change is unrelated to which sister has the set accelerated, so flipping a pair's
+#     orientation flips every NES of that pair together. That keeps the correlation among
+#     overlapping gene sets intact, which a per-set correction does not. Exact enumeration
+#     of all 2^n flips up to 16 pairs, 32,768 random flips above that.
+#  2. Gene-level convergence, with no gene-set annotation at all. The correlation across
+#     genes of the focal-oriented scores between every two pairs of a group. Convergence
+#     predicts a positive mean pairwise correlation, tested one-sided against the same
+#     sign-flip distribution.
+#  3. Magnitude against the baseline. Whether sets shift MORE, in either direction, in the
+#     focal group than in the minimal-change pairs: mean |NES| in the group minus mean
+#     |NES| in the minimal pairs, per set and averaged over sets, against permutation of
+#     group labels among the pairs. Fast-evolving families (immune, olfactory) reach large
+#     |NES| in every pair whatever its flight habit, which is why the minimal pairs are
+#     the comparison rather than zero.
+#
+# Per-pair GSEA is BH-corrected within each pair and collection. Per-set convergence is
+# BH-corrected within each group and collection. Reported at q < 0.05.
+#
+# Requires: fgsea
+# In:  ../output/traits_contrasts.csv, ../output/traits_per_taxon.csv,
+#      ../data/dnds_sisdifs_vol.Rdata, ../data/goterms.csv, ../data/kegg_sets.csv
+# Out: ../output/pair_gsea.csv, ../output/pair_gsea_convergence.csv,
+#      ../output/pair_gsea_omnibus.csv, ../output/pair_gene_correlations.csv,
+#      ../figures/FigX_pair_gsea.pdf
+
+suppressMessages(library(fgsea))
+
+MIN_SET   <- 10
+MAX_SET   <- 500
+QCUT      <- 0.05
+MIN_COVER <- 2 / 3     # a set enters a group test if tested in at least this share of pairs
+NPERM     <- 10000     # label permutations for test 3
+NPROC     <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", "1"))
+set.seed(27)
+
+dir.create("../output", showWarnings = FALSE)
+dir.create("../figures", showWarnings = FALSE)
+
+
+# ---- 1. Pairs, groups and orientation ----
+
+contr <- read.csv("../output/traits_contrasts.csv", stringsAsFactors = FALSE)
+taxa  <- read.csv("../output/traits_per_taxon.csv", stringsAsFactors = FALSE)
+load("../data/dnds_sisdifs_vol.Rdata")
+
+lesser <- taxa$code[taxa$sister == "lesser"]
+contr$comparison <- sub("-[A-Z]{2}$", "", contr$pair_id)
+
+d <- sisdifggdnds
+d$comparison <- as.character(d$comparison)   # a FACTOR in the Rdata, see STATUS traps
+stopifnot(setequal(unique(d$comparison), contr$comparison))
+# every pair must have exactly one lesser sister, or the orientation below is undefined
+chk <- unique(d[, c("comparison", "sp1", "sp2")])
+stopifnot(nrow(chk) == 42, all((chk$sp1 %in% lesser) + (chk$sp2 %in% lesser) == 1))
+
+reduced <- contr$habit %in% c("toward flight loss", "toward limited flight")
+GROUPS <- list(
+  migration     = list(pairs = contr$comparison[contr$habit == "to migratory"],   sign = +1),
+  reduction     = list(pairs = contr$comparison[reduced],                         sign = -1),
+  minimal       = list(pairs = contr$comparison[contr$habit == "minimal"],        sign = +1),
+  migration_all = list(pairs = contr$comparison[contr$migration_pair == 1],       sign = +1),
+  flight_loss   = list(pairs = contr$comparison[contr$flight_loss_pair == 1],     sign = -1))
+for (g in names(GROUPS)) cat(sprintf("%-14s %2d pairs\n", g, length(GROUPS[[g]]$pairs)))
+# The migratory sister must be the more flight-capable one and the reduced sister the
+# less capable one, or the focal signs above are wrong.
+stopifnot(all(contr$migration_pair[contr$comparison %in% GROUPS$migration_all$pairs] == 1),
+          all(contr$d_loading[reduced] < 0))
+
+
+# ---- 2. Per-pair ranked lists ----
+
+d <- d[is.finite(d$moldiff) & d$moldiff > 0, ]
+d$key <- sub("[.]c123.*$", "", as.character(d$locus))
+# positive = omega faster in the more flight-capable sister
+d$y <- ifelse(d$sp1 %in% lesser, -1, 1) * log(d$moldiff)
+rint <- function(v) qnorm((rank(v) - 0.5) / length(v))
+ranks <- lapply(split(d, d$comparison), function(v) {
+  v <- v[!duplicated(v$key), ]
+  setNames(rint(v$y), v$key)
+})
+cat("\ngenes per pair: median", median(lengths(ranks)), "range",
+    paste(range(lengths(ranks)), collapse = " to "), "\n")
+
+
+# ---- 3. Gene sets, parsed as in 21_gsea ----
+
+go <- read.csv("../data/goterms.csv", stringsAsFactors = FALSE, row.names = 1)
+go <- go[!is.na(go$fullgo) & !grepl("^\\s*NA\\s*$", go$fullgo), ]
+rx <- "GO:[0-9]{7}; [^;]+; (function|process|component)"
+hits <- regmatches(go$fullgo, gregexpr(rx, go$fullgo))
+go_t2g <- do.call(rbind, lapply(seq_along(hits), function(i) {
+  if (!length(hits[[i]])) return(NULL)
+  data.frame(term = sub(";.*$", "", hits[[i]]), gene = go$ID[i], stringsAsFactors = FALSE)
+}))
+go_t2n <- unique(data.frame(
+  term = sub(";.*$", "", unlist(hits)),
+  name = sub("^GO:[0-9]{7}; ", "", sub("; (function|process|component)$", "", unlist(hits))),
+  stringsAsFactors = FALSE))
+ks <- read.csv("../data/kegg_sets.csv", stringsAsFactors = FALSE)
+
+COLL <- list(
+  GO   = list(sets = split(go_t2g$gene, go_t2g$term),
+              names = setNames(go_t2n$name, go_t2n$term)[!duplicated(go_t2n$term)]),
+  KEGG = list(sets = split(ks$gene, ks$term),
+              names = setNames(ks$name, ks$term)[!duplicated(ks$term)]))
+for (cl in names(COLL)) COLL[[cl]]$sets <- lapply(COLL[[cl]]$sets, unique)
+
+
+# ---- 4. GSEA in every pair ----
+
+cat("\nper-pair GSEA\n")
+pg <- do.call(rbind, lapply(names(COLL), function(cl) {
+  do.call(rbind, lapply(names(ranks), function(pr) {
+    set.seed(27)
+    f <- suppressWarnings(fgsea(COLL[[cl]]$sets, ranks[[pr]], minSize = MIN_SET,
+                                maxSize = MAX_SET, eps = 0,
+                                BPPARAM = BiocParallel::MulticoreParam(NPROC,
+                                                                       progressbar = FALSE)))
+    if (!nrow(f)) return(NULL)
+    data.frame(collection = cl, comparison = pr, set = f$pathway,
+               name = unname(COLL[[cl]]$names[f$pathway]), size = f$size,
+               NES = f$NES, p = f$pval, q = f$padj,
+               leading_edge = vapply(f$leadingEdge, paste, "", collapse = ";"),
+               stringsAsFactors = FALSE)
+  }))
+}))
+info <- contr[, c("comparison", "pair_id", "habit", "migration_pair", "flight_loss_pair",
+                  "sp_lesser", "sp_greater", "age")]
+pg <- merge(info, pg, by = "comparison")
+pg$accelerated_in <- ifelse(pg$NES > 0, pg$sp_greater, pg$sp_lesser)
+write.csv(pg[order(pg$collection, pg$pair_id, pg$p), ], "../output/pair_gsea.csv",
+          row.names = FALSE)
+
+cat("\nsets at q <", QCUT, "within each pair (positive = accelerated in the more",
+    "flight-capable sister)\n")
+per_pair <- do.call(rbind, lapply(split(pg, list(pg$collection, pg$pair_id), drop = TRUE),
+  function(v) data.frame(collection = v$collection[1], pair_id = v$pair_id[1],
+                         habit = v$habit[1], tested = nrow(v),
+                         sig_pos = sum(v$q < QCUT & v$NES > 0),
+                         sig_neg = sum(v$q < QCUT & v$NES < 0))))
+print(per_pair[order(per_pair$collection, per_pair$habit), ], row.names = FALSE)
+
+
+# ---- 5. Recurrence across pairs ----
+
+# Every flip vector of n pairs, as an n x 2^n matrix of +1 and -1, with the observed
+# orientation (all +1) first. Above MAX_EXACT pairs a random sample of flips is used.
+MAX_EXACT <- 16
+all_flips <- function(n) {
+  if (n <= MAX_EXACT) return(t(as.matrix(expand.grid(rep(list(c(1, -1)), n)))))
+  cbind(1, matrix(sample(c(1, -1), n * 2^15, replace = TRUE), n))
+}
+
+nes_matrix <- function(cl, pairs, sign) {
+  v <- pg[pg$collection == cl & pg$comparison %in% pairs, ]
+  m <- tapply(v$NES, list(v$set, v$comparison), mean)
+  m <- m[, intersect(pairs, colnames(m)), drop = FALSE] * sign
+  m[rowMeans(is.finite(m)) >= MIN_COVER, , drop = FALSE]
+}
+
+# t statistics of every row under every flip, vectorised. Flipping changes only the row
+# sums, so sums of squares are computed once.
+t_under_flips <- function(m, F) {
+  ok <- is.finite(m); m0 <- m; m0[!ok] <- 0
+  n  <- rowSums(ok); ss <- rowSums(m0^2)
+  s  <- m0 %*% F
+  mu <- s / n
+  sdv <- sqrt(pmax((ss - n * mu^2) / (n - 1), 1e-12))
+  mu / (sdv / sqrt(n))
+}
+
+conv <- list(); omni <- list(); gcor <- list()
+for (cl in names(COLL)) for (g in names(GROUPS)) {
+  G <- GROUPS[[g]]
+  m <- nes_matrix(cl, G$pairs, G$sign)
+  n_pairs <- ncol(m)
+  F <- all_flips(n_pairs)
+  tt <- t_under_flips(m, F)
+  t_obs <- tt[, 1]                       # the first column of expand.grid is all +1
+  stopifnot(all(F[, 1] == 1))
+  n_set <- rowSums(is.finite(m))
+  p_t <- 2 * pt(-abs(t_obs), n_set - 1)          # parametric, kept for the record
+  # exact sign-flip p per set. Pairs missing for a set are zeroed in t_under_flips, so
+  # their flips leave the set's t unchanged, which is correct.
+  ge <- abs(tt) >= abs(t_obs) - 1e-12
+  p_f <- rowMeans(ge)
+  # omnibus 1: number of sets with sign-flip p < 0.05, against all flips. The p of every
+  # set under every flip is its rank among all flips, computed once per row.
+  rk <- t(apply(abs(tt), 1, function(v) {
+    o <- rank(-v, ties.method = "max"); o / length(v) }))
+  cnt <- colSums(rk < 0.05)
+  # recurring leading-edge genes: in the leading edge of at least half the pairs in which
+  # the set moves in the same direction as the group mean
+  le <- pg[pg$collection == cl & pg$comparison %in% G$pairs & pg$set %in% rownames(m), ]
+  le$focal <- le$NES * G$sign
+  rec <- vapply(rownames(m), function(s) {
+    v <- le[le$set == s & sign(le$focal) == sign(t_obs[s]), ]
+    if (!nrow(v)) return("")
+    tab <- table(unlist(strsplit(v$leading_edge, ";")))
+    paste(names(sort(tab[tab >= ceiling(n_pairs / 2)], decreasing = TRUE)), collapse = ";")
+  }, "")
+
+  # test 3: magnitude against the minimal pairs, unless this IS the minimal group
+  mag <- rep(NA_real_, nrow(m)); p_mag <- rep(NA_real_, nrow(m)); glob <- c(NA, NA)
+  if (g != "minimal") {
+    ref <- setdiff(GROUPS$minimal$pairs, G$pairs)
+    a <- abs(nes_matrix(cl, c(G$pairs, ref), 1))
+    a <- a[intersect(rownames(m), rownames(a)), , drop = FALSE]
+    lab <- colnames(a) %in% G$pairs
+    ok <- is.finite(a); a0 <- a; a0[!ok] <- 0
+    diff_for <- function(l) {
+      L <- cbind(l, !l) * 1
+      mu <- (a0 %*% L) / (ok %*% L)
+      mu[, 1] - mu[, 2]
+    }
+    obs <- diff_for(lab)
+    perm <- replicate(NPERM, diff_for(sample(lab)))
+    mag[match(rownames(a), rownames(m))] <- obs
+    p_mag[match(rownames(a), rownames(m))] <-
+      (rowSums(abs(perm) >= abs(obs)) + 1) / (NPERM + 1)
+    gm <- colMeans(perm, na.rm = TRUE)
+    glob <- c(mean(obs, na.rm = TRUE), (sum(gm >= mean(obs, na.rm = TRUE)) + 1) / (NPERM + 1))
+  }
+
+  conv[[paste(cl, g)]] <- data.frame(
+    collection = cl, group = g, set = rownames(m),
+    name = unname(COLL[[cl]]$names[rownames(m)]), n_pairs = n_set,
+    mean_focal_NES = rowMeans(m, na.rm = TRUE), n_focal_up = rowSums(m > 0, na.rm = TRUE),
+    t = t_obs, p_t = p_t, p = p_f, q = p.adjust(p_f, "BH"),
+    abs_NES_minus_minimal = mag, p_magnitude = p_mag,
+    q_magnitude = p.adjust(p_mag, "BH"), recurrent_leading_edge = rec,
+    stringsAsFactors = FALSE)
+
+  # test 2: gene-level convergence from the per-pair ranked lists
+  gl <- ranks[colnames(m)]
+  C <- matrix(NA_real_, n_pairs, n_pairs, dimnames = list(colnames(m), colnames(m)))
+  for (i in seq_len(n_pairs)) for (j in seq_len(n_pairs)) {
+    k <- intersect(names(gl[[i]]), names(gl[[j]]))
+    # every pair of a group shares the same focal sign, so the oriented correlation is
+    # the raw one
+    C[i, j] <- cor(gl[[i]][k], gl[[j]][k])
+  }
+  off <- function(f) (sum((f %o% f) * C) - n_pairs) / (n_pairs * (n_pairs - 1))
+  r_null <- apply(F, 2, off)
+  r_obs <- r_null[1]
+  if (cl == "GO") {
+    cc <- as.data.frame(as.table(C), stringsAsFactors = FALSE)
+    names(cc) <- c("pair_a", "pair_b", "r")
+    gcor[[g]] <- cbind(group = g, cc[cc$pair_a < cc$pair_b, ])
+  }
+
+  omni[[paste(cl, g)]] <- data.frame(
+    collection = cl, group = g, pairs = n_pairs, sets_tested = nrow(m), flips = ncol(F),
+    sets_p05 = cnt[1], sets_p05_null_mean = mean(cnt),
+    sets_p05_null_95 = quantile(cnt, 0.95), p_sets = mean(cnt >= cnt[1]),
+    sets_q05 = sum(p.adjust(p_f, "BH") < QCUT),
+    sets_q05_parametric = sum(p.adjust(p_t, "BH") < QCUT),
+    flip_resolution = 2 / ncol(F),
+    # one-sided: convergence predicts positive correlation between pairs
+    gene_mean_r = r_obs, p_gene_r = mean(r_null >= r_obs),
+    mean_abs_NES_minus_minimal = glob[1], p_magnitude = glob[2])
+}
+
+conv <- do.call(rbind, conv)
+omni <- do.call(rbind, omni)
+write.csv(conv[order(conv$collection, conv$group, conv$p), ],
+          "../output/pair_gsea_convergence.csv", row.names = FALSE)
+write.csv(omni, "../output/pair_gsea_omnibus.csv", row.names = FALSE)
+write.csv(do.call(rbind, gcor), "../output/pair_gene_correlations.csv", row.names = FALSE)
+
+cat("\n", strrep("=", 78), "\nOmnibus tests of recurrence\n\n", sep = "")
+print(format(omni[, c("collection", "group", "pairs", "sets_tested", "sets_p05",
+                      "sets_p05_null_mean", "p_sets", "sets_q05", "sets_q05_parametric",
+                      "flip_resolution", "gene_mean_r",
+                      "p_gene_r", "mean_abs_NES_minus_minimal", "p_magnitude")],
+             digits = 3), row.names = FALSE)
+cat("\nSets with directional convergence at q <", QCUT, "\n")
+s <- conv[conv$q < QCUT, c("collection", "group", "name", "n_pairs", "n_focal_up",
+                           "mean_focal_NES", "q")]
+if (nrow(s)) print(format(s, digits = 3), row.names = FALSE) else cat("  none\n")
+cat("\nSets with larger shifts than in the minimal pairs at q <", QCUT, "\n")
+s <- conv[is.finite(conv$q_magnitude) & conv$q_magnitude < QCUT,
+          c("collection", "group", "name", "n_pairs", "abs_NES_minus_minimal", "q_magnitude")]
+if (nrow(s)) print(format(s, digits = 3), row.names = FALSE) else cat("  none\n")
+cat("\nTop five sets by directional convergence, primary groups\n")
+for (k in c("migration", "reduction")) for (cl in names(COLL)) {
+  v <- head(conv[conv$group == k & conv$collection == cl, ][
+    order(conv$p[conv$group == k & conv$collection == cl]), ], 5)
+  cat(" ", k, cl, "\n")
+  print(format(v[, c("name", "n_pairs", "n_focal_up", "mean_focal_NES", "p", "q")],
+               digits = 3), row.names = FALSE)
+}
+cat(strrep("=", 78), "\n")
+
+
+# ---- 6. Figure ----
+#
+# A, B: focal NES of the ten most convergent GO sets in each primary group, across that
+# group's pairs and, for reference, the minimal pairs. C: the gene-level correlations
+# between pairs, all 42 pairs, oriented by the trait table and ordered by group.
+
+pal <- colorRampPalette(c("#2B6A99", "#F4F1EA", "#B5432A"))(101)
+heat <- function(cl, g) {
+  G <- GROUPS[[g]]
+  top <- head(conv[conv$collection == cl & conv$group == g, ][
+    order(conv$p[conv$collection == cl & conv$group == g]), "set"], 10)
+  v <- pg[pg$collection == cl & pg$set %in% top, ]
+  m <- tapply(v$NES, list(v$set, v$comparison), mean)
+  cols <- c(G$pairs, GROUPS$minimal$pairs)
+  m <- m[top, intersect(cols, colnames(m)), drop = FALSE]
+  m[, colnames(m) %in% G$pairs] <- m[, colnames(m) %in% G$pairs] * G$sign
+  z <- pmax(pmin(m, 3), -3)
+  par(mar = c(7, 16, 3, 1))
+  image(seq_len(ncol(z)), seq_len(nrow(z)), t(z), col = pal, zlim = c(-3, 3),
+        axes = FALSE, xlab = "", ylab = "")
+  axis(1, seq_len(ncol(z)), colnames(z), las = 2, cex.axis = 0.5, tick = FALSE)
+  axis(2, seq_len(nrow(z)), substr(unname(COLL[[cl]]$names[rownames(z)]), 1, 45),
+       las = 1, cex.axis = 0.55, tick = FALSE)
+  abline(v = sum(colnames(z) %in% G$pairs) + 0.5, lwd = 2)
+  mtext(sprintf("%s pairs (focal NES) | minimal pairs (NES)", g), 3, 0.5, cex = 0.7)
+}
+pdf("../figures/FigX_pair_gsea.pdf", width = 11, height = 12)
+layout(matrix(c(1, 2, 3, 3), 2, 2, byrow = TRUE))
+heat("GO", "migration")
+heat("GO", "reduction")
+ord <- unique(c(GROUPS$migration$pairs, GROUPS$reduction$pairs, GROUPS$minimal$pairs))
+ord <- c(ord, setdiff(names(ranks), ord))
+R <- matrix(NA_real_, length(ord), length(ord), dimnames = list(ord, ord))
+for (i in seq_along(ord)) for (j in seq_along(ord)) {
+  k <- intersect(names(ranks[[ord[i]]]), names(ranks[[ord[j]]]))
+  R[i, j] <- if (i == j) NA else cor(ranks[[ord[i]]][k], ranks[[ord[j]]][k])
+}
+par(mar = c(7, 7, 3, 1))
+lim <- max(abs(R), na.rm = TRUE)
+image(seq_along(ord), seq_along(ord), R, col = pal, zlim = c(-lim, lim), axes = FALSE,
+      xlab = "", ylab = "")
+axis(1, seq_along(ord), ord, las = 2, cex.axis = 0.45, tick = FALSE)
+axis(2, seq_along(ord), ord, las = 1, cex.axis = 0.45, tick = FALSE)
+b <- cumsum(c(length(GROUPS$migration$pairs),
+              length(setdiff(GROUPS$reduction$pairs, GROUPS$migration$pairs)),
+              length(GROUPS$minimal$pairs))) + 0.5
+abline(v = b, h = b, lwd = 1.5)
+mtext(sprintf("gene-level correlation of omega scores between pairs (|r| max %.2f)", lim),
+      3, 0.5, cex = 0.7)
+dev.off()
+cat("\nwritten ../figures/FigX_pair_gsea.pdf\n")
