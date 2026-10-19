@@ -15,7 +15,7 @@
 # Requires: none beyond base R
 # In:  ../output/traits_contrasts.csv, ../output/traits_per_taxon.csv,
 #      ../data/dnds_sisdifs_vol.Rdata
-# Out: ../output/power_curves.csv, ../figures/FigS2_power.pdf
+# Out: ../output/power_curves.csv, ../output/power_loo.csv, ../figures/FigS2_power.pdf
 
 set.seed(42)
 N_GENES_NOISE <- 400     # genes sampled to measure realistic residual noise
@@ -135,6 +135,8 @@ names(loo) <- names(x)
 cat(sprintf("\nleave-one-pair-out at rho = 0.4: full slope %.3f, range %.3f to %.3f\n",
             full, min(loo), max(loo)))
 cat("most influential pair:", names(which.max(abs(loo - full))), "\n")
+write.csv(data.frame(pair = names(loo), slope = loo, full = full),
+          "../output/power_loo.csv", row.names = FALSE)
 
 
 # ---- 4. Figure ----
