@@ -1,0 +1,35 @@
+# 16d_age_slopes.Rscript
+#
+# Slope of each rate contrast with pair age within pairs with and without a gain of
+# migration, from the constant-variance fits of script 16c (all 42 pairs, and the 36
+# without migration gains that coincide with flight loss or limited flight). The slope
+# without migration is the age term, and with migration the age term plus the
+# age-by-migration interaction, both per Myr on the ln-ratio scale, with the loading
+# contrast at its mean.
+#
+# Requires: brms, posterior
+# In:  ../output/age_interaction_fits.rds, ../output/rate_contrasts.csv
+# Out: ../output/age_slopes.csv
+
+suppressPackageStartupMessages({ library(brms); library(posterior) })
+
+fits <- readRDS("../output/age_interaction_fits.rds")
+dat  <- read.csv("../output/rate_contrasts.csv", stringsAsFactors = FALSE)
+RESP <- c(ds = "med_logratio_ds", dn = "med_logratio_dn", w = "med_logratio_w")
+y_sd <- sapply(RESP, function(v) sd(dat[[v]]))
+x_div <- 2 * sd(dat$age)
+
+out <- do.call(rbind, lapply(c("all_hom", "drop_overlap_hom"), function(lab) {
+  dr <- as_draws_df(fits[[lab]])
+  do.call(rbind, lapply(names(RESP), function(r) {
+    s0 <- dr[[paste0("b_", r, "_age")]] * y_sd[[r]] / x_div
+    s1 <- s0 + dr[[paste0("b_", r, "_age_x_mig")]] * y_sd[[r]] / x_div
+    do.call(rbind, lapply(list(no_migration_gain = s0, migration_gain = s1), function(b)
+      data.frame(estimate = median(b), lower = quantile(b, 0.025),
+                 upper = quantile(b, 0.975), pd = max(mean(b > 0), mean(b < 0)))))
+  })) -> x
+  data.frame(set = sub("_hom$", "", lab), response = rep(names(RESP), each = 2),
+             group = rep(c("no migration gain", "migration gain"), 3), x, row.names = NULL)
+}))
+write.csv(out, "../output/age_slopes.csv", row.names = FALSE)
+print(format(out, digits = 3), row.names = FALSE)

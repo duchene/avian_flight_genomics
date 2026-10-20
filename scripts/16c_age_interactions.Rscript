@@ -1,0 +1,244 @@
+# 16c_age_interactions.Rscript
+#
+# Does the effect of each flight phenotype on the rate contrasts change with pair age?
+#
+# The response of script 16 is the median log ratio of a rate between the two sisters.
+# Both terminal branches span the same time since the sisters' common ancestor, so the
+# ratio of their divergences is the ratio of their average rates, and time cancels. Two
+# processes can still make the ratio change with age, and this script separates them.
+#
+#   1. A trait effect that builds up, either gradually or because the change in flight
+#      habit occurred partway along the branch. Pairs with the trait then show a steeper
+#      slope of the SIGNED contrast with age: an age-by-trait interaction in the mean.
+#      A shift established early and sustained instead shows as a constant offset, which
+#      is the main effect already estimated by script 16.
+#   2. Rate drift. Rates vary along every lineage, so the average rates of two sisters
+#      diverge further the longer they have been apart, whatever their flight habit. This
+#      widens the spread of contrasts with age around the mean, and is modelled here as a
+#      residual SD that depends on age (sigma ~ age).
+#
+# The previous reading of pair age used the absolute contrast, which mixes the two: rate
+# drift raises the absolute contrast with age in every group, and a constant trait offset
+# plus drift can even flatten the absolute slope of the trait group.
+#
+# MODEL. Script 16's multi-response regression of dS, dN and omega with correlated
+# residuals, the same data sets, scaling and priors, extended by
+#
+#   mean:  d_loading + migration_pair + flight_loss_pair + age
+#          + age:migration_pair + age:flight_loss_pair + age:d_loading  [+ d_logmass]
+#   sigma: ~ age (primary, "het") or constant (sensitivity, "hom", as in script 16)
+#
+# Age is centred and divided by 2 SD, so the main effects are those at the mean pair age
+# and stay comparable with script 16. Interactions are reported per million years of pair
+# age. The two variance structures are compared by approximate leave-one-out
+# cross-validation on the joint likelihood. Script 16 chose not to model the variance
+# before fitting, so the constant-variance fits are kept as its direct counterpart.
+#
+# Requires: brms, posterior, loo (rstan backend)
+# In:  ../output/rate_contrasts.csv (script 16)
+# Out: ../output/age_interaction_posteriors.csv, ../output/age_interaction_sigma.csv,
+#      ../output/age_interaction_diagnostics.csv, ../output/age_interaction_loo.csv,
+#      ../output/age_interaction_lines.csv, ../output/age_interaction_fits.rds (primary fits)
+
+suppressPackageStartupMessages({
+  library(brms)
+  library(posterior)
+  library(loo)
+})
+
+dat <- read.csv("../output/rate_contrasts.csv", stringsAsFactors = FALSE)
+stopifnot(nrow(dat) == 42)
+
+CHAINS <- 4; ITER <- 4000; WARMUP <- 2000; SEED <- 2026
+CORES  <- min(CHAINS, parallel::detectCores())
+
+
+# ---- 1. Scaling, as in script 16 ----
+
+RESP <- c(ds = "med_logratio_ds", dn = "med_logratio_dn", w = "med_logratio_w")
+CONT <- c("d_loading", "age", "d_logmass")
+BIN  <- c("migration_pair", "flight_loss_pair")
+
+y_mean <- sapply(RESP, function(v) mean(dat[[v]]))
+y_sd   <- sapply(RESP, function(v) sd(dat[[v]]))
+x_mean <- sapply(CONT, function(v) mean(dat[[v]]))
+x_div  <- sapply(CONT, function(v) 2 * sd(dat[[v]]))
+
+scaled <- function(d) {
+  out <- d[, c("pair_id", "habit", BIN)]
+  for (r in names(RESP)) out[[r]] <- (d[[RESP[r]]] - y_mean[r]) / y_sd[r]
+  for (v in CONT) out[[v]] <- (d[[v]] - x_mean[v]) / x_div[v]
+  # interactions built explicitly so that each has a plain coefficient name
+  out$age_x_mig  <- out$age * out$migration_pair
+  out$age_x_loss <- out$age * out$flight_loss_pair
+  out$age_x_load <- out$age * out$d_loading
+  out
+}
+
+# Divisor that returns each coefficient to ln-ratio units per unit of its predictor
+# (per Myr for the age terms).
+DIV <- c(d_loading = x_div[["d_loading"]], age = x_div[["age"]],
+         d_logmass = x_div[["d_logmass"]], migration_pair = 1, flight_loss_pair = 1,
+         age_x_mig = x_div[["age"]], age_x_loss = x_div[["age"]],
+         age_x_load = x_div[["age"]] * x_div[["d_loading"]])
+
+dat$overlap <- dat$migration_pair == 1 & dat$habit != "to migratory"
+sets <- list(
+  all          = dat,
+  drop_overlap = dat[!dat$overlap, ],
+  mig_vs_min   = dat[dat$habit %in% c("to migratory", "minimal"), ],
+  drop_aptfor  = dat[dat$pair_id != "APTFOR-PELURI-FV", ])
+stopifnot(sapply(sets, nrow) == c(42, 36, 30, 41))
+
+
+# ---- 2. Fitting ----
+
+terms_for <- function(d, mass) {
+  tm <- c("d_loading", "migration_pair", "flight_loss_pair", "age",
+          "age_x_mig", "age_x_loss", "age_x_load")
+  if (mass) tm <- c(tm, "d_logmass")
+  tm[sapply(tm, function(v) length(unique(d[[v]])) > 1)]
+}
+
+fit_mv <- function(d, tm, het) {
+  rhs <- paste(tm, collapse = " + ")
+  form <- Reduce(`+`, lapply(names(RESP), function(r) {
+    if (het) bf(as.formula(paste(r, "~", rhs)), as.formula("sigma ~ age"))
+    else bf(as.formula(paste(r, "~", rhs)))
+  })) + set_rescor(TRUE)
+  pr <- c(prior(normal(0, 1), class = "b"),
+          prior(student_t(3, 0, 1), class = "Intercept"),
+          prior(lkj(2), class = "rescor"))
+  for (r in names(RESP)) {
+    pr <- c(pr, if (het) c(set_prior("normal(0, 1)", class = "b", dpar = "sigma", resp = r),
+                           set_prior("student_t(3, 0, 1)", class = "Intercept",
+                                     dpar = "sigma", resp = r))
+                else set_prior("exponential(1)", class = "sigma", resp = r))
+  }
+  brm(form, data = d, prior = pr, chains = CHAINS, iter = ITER, warmup = WARMUP,
+      seed = SEED, cores = CORES, refresh = 0, save_pars = save_pars(all = TRUE),
+      control = list(adapt_delta = 0.95, max_treedepth = 12))
+}
+
+diagnose <- function(fit) {
+  s <- summarise_draws(as_draws_df(fit), "rhat", "ess_bulk", "ess_tail")
+  s <- s[!grepl("^lp__|^lprior", s$variable), ]
+  np <- nuts_params(fit)
+  data.frame(max_rhat = max(s$rhat, na.rm = TRUE),
+             min_ess_bulk = min(s$ess_bulk, na.rm = TRUE),
+             min_ess_tail = min(s$ess_tail, na.rm = TRUE),
+             divergent = sum(np$Value[np$Parameter == "divergent__"]))
+}
+
+summarise_fit <- function(fit, tm, set, mass, het) {
+  dr <- as_draws_df(fit)
+  do.call(rbind, lapply(names(RESP), function(r) do.call(rbind, lapply(tm, function(v) {
+    b <- dr[[paste0("b_", r, "_", v)]] * y_sd[[r]] / DIV[[v]]
+    q <- quantile(b, c(0.5, 0.025, 0.975))
+    data.frame(set = set, mass = mass, variance = if (het) "sigma ~ age" else "constant",
+               response = r, term = v, estimate = q[1], lower = q[2], upper = q[3],
+               pd = max(mean(b > 0), mean(b < 0)), row.names = NULL)
+  }))))
+}
+
+# Residual SD on the ln-ratio scale: its multiplicative change per 10 Myr of pair age
+summarise_sigma <- function(fit, set, mass) {
+  dr <- as_draws_df(fit)
+  do.call(rbind, lapply(names(RESP), function(r) {
+    b <- dr[[paste0("b_sigma_", r, "_age")]] / x_div[["age"]]
+    m <- exp(10 * b)
+    q <- quantile(m, c(0.5, 0.025, 0.975))
+    data.frame(set = set, mass = mass, response = r,
+               sd_ratio_per_10myr = q[1], lower = q[2], upper = q[3],
+               pd = max(mean(b > 0), mean(b < 0)), row.names = NULL)
+  }))
+}
+
+post <- list(); sig <- list(); diag <- list(); loos <- list(); fits <- list()
+for (s in names(sets)) for (mass in c(FALSE, TRUE)) {
+  d  <- scaled(sets[[s]])
+  tm <- terms_for(d, mass)
+  for (het in c(TRUE, FALSE)) {
+    lab <- paste0(s, if (mass) "_mass" else "", if (het) "_het" else "_hom")
+    cat("==== fitting", lab, "(n =", nrow(d), ")\n")
+    fit <- fit_mv(d, tm, het)
+    dg <- diagnose(fit)
+    diag[[lab]] <- data.frame(set = s, mass = mass,
+                              variance = if (het) "sigma ~ age" else "constant",
+                              n = nrow(d), dg)
+    post[[lab]] <- summarise_fit(fit, tm, s, mass, het)
+    if (het) sig[[lab]] <- summarise_sigma(fit, s, mass)
+    lo <- loo(fit, moment_match = FALSE)
+    loos[[lab]] <- lo
+    # Only the primary fits are kept, since 16 fits saved with all parameters exceed the
+    # memory of a modest job. The others are summarised above and released.
+    if (lab %in% c("all_het", "all_hom", "drop_overlap_hom")) fits[[lab]] <- fit
+    rm(fit); invisible(gc())
+    if (dg$max_rhat > 1.01 || dg$divergent > 0)
+      cat("  WARNING: max Rhat", round(dg$max_rhat, 3), "divergent", dg$divergent, "\n")
+  }
+}
+
+post <- do.call(rbind, post); sig <- do.call(rbind, sig); diag <- do.call(rbind, diag)
+cmp <- do.call(rbind, lapply(names(sets), function(s) do.call(rbind, lapply(c("", "_mass"),
+  function(m) {
+    a <- loos[[paste0(s, m, "_het")]]; b <- loos[[paste0(s, m, "_hom")]]
+    k <- loo_compare(list(het = a, hom = b))
+    data.frame(set = s, mass = m == "_mass", better = rownames(k)[1],
+               elpd_diff = k[2, "elpd_diff"], se_diff = k[2, "se_diff"],
+               max_pareto_k = max(c(a$diagnostics$pareto_k, b$diagnostics$pareto_k)),
+               row.names = NULL)
+  }))))
+write.csv(post, "../output/age_interaction_posteriors.csv", row.names = FALSE)
+write.csv(sig,  "../output/age_interaction_sigma.csv", row.names = FALSE)
+write.csv(diag, "../output/age_interaction_diagnostics.csv", row.names = FALSE)
+write.csv(cmp,  "../output/age_interaction_loo.csv", row.names = FALSE)
+saveRDS(fits, "../output/age_interaction_fits.rds")
+
+
+# ---- 3. Fitted contrast against age, for the figure ----
+#
+# Posterior mean contrast across the observed ages, with the loading contrast at its mean,
+# for pairs without migration gain or flight loss and for pairs with a migration gain only.
+# From the constant-variance fits, the structure of script 16: all 42 pairs, and the 36
+# pairs in which a migration gain does not coincide with flight loss or limited flight.
+
+ages <- seq(min(dat$age), max(dat$age), length.out = 60)
+lines <- do.call(rbind, lapply(c(all = "all_hom", drop_overlap = "drop_overlap_hom"),
+  function(lab) {
+    dr <- as_draws_df(fits[[lab]])
+    set <- sub("_hom$", "", lab)
+    lm0 <- mean(scaled(sets[[set]])$d_loading)
+    do.call(rbind, lapply(names(RESP), function(r) {
+      b <- function(v) { k <- paste0("b_", r, "_", v); if (k %in% names(dr)) dr[[k]] else 0 }
+      do.call(rbind, lapply(c(none = 0, migration = 1), function(mig) {
+        q <- t(sapply((ages - x_mean[["age"]]) / x_div[["age"]], function(a) {
+          mu <- b("Intercept") + b("d_loading") * lm0 + b("migration_pair") * mig +
+            b("age") * a + b("age_x_mig") * a * mig + b("age_x_load") * a * lm0
+          quantile(mu * y_sd[[r]] + y_mean[[r]], c(0.5, 0.025, 0.975))
+        }))
+        data.frame(set = set, response = r, group = if (mig) "migration" else "none",
+                   age = ages, estimate = q[, 1], lower = q[, 2], upper = q[, 3])
+      }))
+    }))
+  }))
+write.csv(lines, "../output/age_interaction_lines.csv", row.names = FALSE)
+
+
+# ---- 4. Report ----
+
+cat("\nConvergence:\n"); print(format(diag, digits = 3), row.names = FALSE)
+cat("\nVariance structure, LOO (positive elpd_diff favours the 'better' model):\n")
+print(format(cmp, digits = 3), row.names = FALSE)
+show <- function(tm, title) {
+  cat("\n", title, " (posterior median, 95% CrI, ln-ratio per unit):\n", sep = "")
+  x <- post[post$term == tm, c("set", "mass", "variance", "response", "estimate", "lower",
+                               "upper", "pd")]
+  print(format(x, digits = 3), row.names = FALSE)
+}
+show("age_x_mig", "Age x migration, per Myr")
+show("age_x_loss", "Age x flight loss, per Myr")
+show("age_x_load", "Age x loading index, per Myr per unit of loading")
+show("migration_pair", "Migration at the mean pair age")
+cat("\nResidual SD, multiplicative change per 10 Myr of pair age:\n")
+print(format(sig, digits = 3), row.names = FALSE)

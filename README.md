@@ -68,6 +68,8 @@ the spreadsheet.
 | `15_fig_validation` | run, 1 s | Figure 1, framed as validation. Panel C shows the index recovers measured wing loading at R² = 0.93 |
 | `16_rate_contrasts` | run, 14 min | Genome-wide dS, dN and omega contrasts in one multi-response Bayesian regression on the index, migration, flight loss and pair age, without and with mass. See below |
 | `16b_mass_vs_loading` | run, 33 min | Mass in place of the index in the script 16 model, and leave-one-out comparison of the loading, mass and combined models. Mass predicts best in every data set |
+| `16c_age_interactions` | run, 29 min | The script 16 model with the interactions of pair age with migration, flight loss and the loading index, constant or age-dependent residual variance. Job script `hpc/brms/16c_age_interactions.sh` |
+| `16d_age_slopes` | run, 1 min | Slope of each rate contrast with pair age within pairs with and without a migration gain, from the 16c fits |
 | `17_power_sim` | run, 28 s | Detection power of the 42-pair design, computed analytically from the non-central t |
 | `18_hyphaeon_prep` | run, 33 s | Phenotype table and gene manifest. 14,124 of 14,957 genes retained |
 | `19_hyphaeon_run.py` | run, 26 h | The per-gene screen. Python, not R. See below |
@@ -266,6 +268,7 @@ alone, with the single exception of the codon alignments.
 | 09 to 13, per-gene tests and genome size | committed `.Rdata` only | minutes |
 | 14 to 22, traits, contrasts, screens | committed `.Rdata` only | minutes, except 19 |
 | 19, the HyphAeon screen | codon alignments, hyphaeon | 26 h |
+| 16c, age interactions | output of 16 | 29 min, 16 GB |
 | 23, the MR-PMM | committed `.Rdata` only | 9.2 h per specification |
 | 24 to 26, figures and PELICAN inputs | outputs of the above | minutes |
 | 27 and 28, GSEA within pairs and footprints | outputs of 14 and the KEGG sets | 4 min and 10 s |
