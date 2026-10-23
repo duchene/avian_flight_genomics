@@ -65,6 +65,8 @@ the spreadsheet.
 | | status | |
 |---|---|---|
 | `14_traits_assemble` | run, 2 s | Per-taxon and per-pair trait tables, the wing-loading index, its contrasts, the two binary phenotypes |
+| `13b_generation_length` | run | Generation length per taxon from Bird et al. (2020) Table S4, to `data/generation_length.csv`. Needs the supplement (`BIRD2020_TABLES4`) |
+| `14c_table_s1_generation.py` | run | Writes generation length and its source into Table S2 of `data/Table_S1.xlsx`, after script 14 |
 | `15_fig_validation` | run, 1 s | Figure 1, framed as validation. Panel C shows the index recovers measured wing loading at R² = 0.93 |
 | `16_rate_contrasts` | run, 14 min | Genome-wide dS, dN and omega contrasts in one multi-response Bayesian regression on the index, migration, flight loss and pair age, without and with mass. See below |
 | `16b_mass_vs_loading` | run, 33 min | Mass in place of the index in the script 16 model, and leave-one-out comparison of the loading, mass and combined models. Mass predicts best in every data set |
@@ -73,6 +75,7 @@ the spreadsheet.
 | `17_power_sim` | run, 28 s | Detection power of the 42-pair design, computed analytically from the non-central t |
 | `18_hyphaeon_prep` | run, 33 s | Phenotype table and gene manifest. 14,124 of 14,957 genes retained |
 | `19_hyphaeon_run.py` | run, 26 h | The per-gene screen. Python, not R. See below |
+| `19b_gc3` | run, 11 min | GC at third codon positions per gene and taxon, and its sister ratios in the format of the rate data. Job script `hpc/brms/gc3.sh` |
 | `20_hyphaeon_collect` | run | Parses the JSON, false-discovery control, base-composition check, non-neural comparator |
 | `20b_contrast_screen` | run | **Primary per-gene analysis.** Sister-pair rate contrasts against the flight-index contrast. No phylogenetic null, so nothing to misspecify |
 | `21_gsea` | run | GSEA on the continuous signed statistic, no threshold cut |
@@ -279,6 +282,25 @@ repository root) and need scripts 14 to 28 to have been run. Supplementary figur
 needs `output/per_gene_statistics.csv` from script 20, which requires the HyphAeon screen of
 script 19. Script 21a rebuilds the KEGG gene sets with DIAMOND on GenomeDK
 (`hpc/kegg/21a_kegg_sets.sh`), and its result, `data/kegg_sets.csv`, is committed.
+
+### Sensitivity analyses
+
+Generation length (Bird et al. 2020) and GC content were added as sensitivities. Each is
+switched on by an environment variable, writes outputs with its own suffix, and leaves the
+primary outputs untouched.
+
+| switch | scripts | effect |
+|---|---|---|
+| `SENS=gen` | 16, 16b, 16c | ln generation length replaces ln body mass in every model that includes mass (the two contrasts correlate at r = 0.82) |
+| `SENS=gc` | 16, 16b, 16c | ln genome GC content (Feng et al. 2020) as a fourth response |
+| `MRPMM_COVAR=gen` | 23 | ln generation length as a second fixed effect on all seven responses |
+| `GC3=TRUE` | 20b, and `figure_code/fig3_genomewide.R` in `auk_ms` | the per-gene screen and genome-wide excess on GC3 in place of the rates |
+
+Script 14 imputes the great auk's generation length (the Bird et al. value is a
+family-level extrapolation) and genome GC with `phytools::phylo.impute`, jointly with ln body
+mass. phytools cannot load in the shared R container on GenomeDK, whose igraph lacks GLPK, so
+13b and 14 run in the pixi environment of `hpc/impute/`, and script 23 no longer requires
+phytools. Job scripts for the brms models are in `hpc/brms/`.
 
 ### Paths outside the repository
 

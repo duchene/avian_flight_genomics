@@ -16,4 +16,4 @@ R="apptainer exec --env R_LIBS_USER=$T/Rlib /faststorage/project/DeiC-KU-L04/sha
 cd ../../scripts
 st=$(date +%s)
 $R 16c_age_interactions.Rscript
-echo "rc $? in $(( $(date +%s) - st )) s"
+rc=$?; echo "rc $rc in $(( $(date +%s) - st )) s"; exit $rc

@@ -1,0 +1,36 @@
+# 13b_generation_length.Rscript
+#
+# Generation length for the 84 taxa, from Bird et al. (2020, Conservation Biology 34:
+# 1252-1261, doi 10.1111/cobi.13486), Table S4, column GenLength (G, years).
+#
+# Bird et al. use BirdLife taxonomy, as AVONET does, so each taxon is matched on its
+# AVONET name in Table S2 where one is given and on its AviList name otherwise, with
+# footnote marks removed. Laterallus rogersi is Atlantisia rogersi in BirdLife.
+# The value for Pinguinus impennis is kept here as published. It has no published
+# component in Bird et al. (their Table S2: survival, age at first breeding and longevity
+# all from family-level extrapolation), so script 14 replaces it by imputation.
+#
+# Requires: readxl
+# In:  Bird et al. Table S4 (BIRD2020_TABLES4), ../data/Table_S1.xlsx
+# Out: ../data/generation_length.csv
+
+suppressPackageStartupMessages(library(readxl))
+
+f  <- Sys.getenv("BIRD2020_TABLES4",
+                 "../../Bird_et_al_2020/cobi13486-sup-0004-tables4.xlsx")
+bd <- as.data.frame(suppressMessages(read_excel(f)))
+ts <- as.data.frame(read_excel("../data/Table_S1.xlsx", sheet = "Table S2. Morphometrics"))
+
+name <- ifelse(is.na(ts[["AVONET name (if different)"]]) |
+                 ts[["AVONET name (if different)"]] == "",
+               ts[["Species (AviList)"]], ts[["AVONET name (if different)"]])
+name <- trimws(gsub("[^A-Za-z ]", "", name))         # footnote marks such as a dagger
+name[name == "Laterallus rogersi"] <- "Atlantisia rogersi"   # BirdLife genus
+i <- match(name, bd[["Scientific name"]])
+if (anyNA(i)) stop("unmatched in Bird et al.: ", paste(name[is.na(i)], collapse = ", "))
+
+out <- data.frame(code = ts[["Taxon code"]], species = ts[["Species (AviList)"]],
+                  birdlife_name = bd[["Scientific name"]][i],
+                  gen_bird2020 = bd$GenLength[i], stringsAsFactors = FALSE)
+write.csv(out, "../data/generation_length.csv", row.names = FALSE)
+cat("written ../data/generation_length.csv,", nrow(out), "taxa\n")

@@ -51,7 +51,9 @@
 # FIXED EFFECTS. BUSCO completeness only. Assembly quality is a nuisance that does not
 # evolve on the tree, so it belongs here and not among the responses, which is the point
 # NEE Reviewer 1 raised. Body mass is NOT a fixed effect because it sits inside the
-# flight index, which is a response.
+# flight index, which is a response. MRPMM_COVAR=gen adds ln generation length (Bird et
+# al. 2020, script 14) as a second fixed effect on every response, a sensitivity for life
+# history, with the suffix _gen.
 #
 # RESIDUAL CORRELATION IS OFF.
 #
@@ -76,7 +78,7 @@
 # THE GREAT AUK is excluded. Its "assembly" is 19 Mb of reads mapped to the razorbill, so
 # its genome length and gene count are mapping artefacts rather than measurements.
 #
-# Requires: brms, ape, phytools
+# Requires: brms, ape; phytools optional
 # In:  ../output/traits_per_taxon.csv, ../data/dnds_branches.Rdata,
 #      ../data/dated.auk.tre, ../data/Feng_Table_1.csv
 # Out: ../output/mrpmm_fit.Rdata, ../output/mrpmm_correlations.csv,
@@ -84,7 +86,17 @@
 
 library(brms)
 library(ape)
-suppressMessages(library(phytools))
+# phytools is optional: it gives Pagel's lambda in the audit below, which reports NA when
+# the package cannot load, as on GenomeDK, where its igraph dependency lacks GLPK.
+
+# Extend each terminal branch to the height of the tallest tip, as
+# phytools::force.ultrametric(method = "extend").
+extend_ultrametric <- function(phy) {
+  h <- node.depth.edgelength(phy)[seq_len(Ntip(phy))]
+  te <- match(seq_len(Ntip(phy)), phy$edge[, 2])
+  phy$edge.length[te] <- phy$edge.length[te] + max(h) - h
+  phy
+}
 
 CHAINS <- 4
 ITER   <- 4000
@@ -141,11 +153,15 @@ stopifnot(TRIM %in% c("none", "rz4"))
 # refused outright because brms cannot estimate residual correlation across families.
 FLIGHT <- Sys.getenv("MRPMM_FLIGHT", "loading")
 stopifnot(FLIGHT %in% c("loading", "migration"))
+COVAR <- Sys.getenv("MRPMM_COVAR", "busco")
+stopifnot(COVAR %in% c("busco", "gen"))
+FIXED <- if (COVAR == "gen") c("busco", "ln_gen") else "busco"
 
 SUF <- paste0(if (RESCOR) "_rescor" else "_norescor",
               switch(RATES, both = "", omega = "_noDS", ds = "_noW"),
               switch(FLIGHT, loading = "", migration = "_mig"),
-              if (TRIM == "none") "" else paste0("_", TRIM))
+              if (TRIM == "none") "" else paste0("_", TRIM),
+              if (COVAR == "gen") "_gen" else "")
 
 dir.create("../output", showWarnings = FALSE)
 dir.create("../figures", showWarnings = FALSE)
@@ -199,6 +215,7 @@ tr$ln_genes     <- log(num(g[["Number of total gene"]]))
 tr$gc           <- num(g[["CG content(%)"]])
 tr$ln_intronlen <- log(num(g[["Mean intron length (bp)"]]))
 tr$busco        <- num(g[["Complete BUSCOs (C, %)"]])
+tr$ln_gen       <- log(tr$gen_years)
 
 
 # ---- 3. Model frame ----
@@ -210,7 +227,7 @@ trim_vars <- c("ln_ds", "ln_w", "loading_index", "ln_len", "ln_genes", "gc", "ln
 flight_var <- switch(FLIGHT, loading = "loading_index", migration = "migratory")
 all_vars   <- sub("loading_index", flight_var, trim_vars, fixed = TRUE)
 
-keep <- unique(c(trim_vars, all_vars, "busco"))
+keep <- unique(c(trim_vars, all_vars, FIXED))
 dd <- tr[, c("tip", "code", "species", "ability", "style", keep)]
 dd <- dd[complete.cases(dd[, keep]), ]
 dropped <- setdiff(tr$tip, dd$tip)
@@ -246,7 +263,7 @@ vars <- switch(RATES,
                both  = all_vars,
                omega = setdiff(all_vars, "ln_ds"),
                ds    = setdiff(all_vars, "ln_w"))
-dd <- dd[, c("tip", "code", "species", "ability", "style", vars, "busco")]
+dd <- dd[, c("tip", "code", "species", "ability", "style", vars, FIXED)]
 
 # A response taking only the values 0 and 1 is fitted as Bernoulli, never standardised,
 # and given its own priors. Detection is by value rather than by name so that adding a
@@ -275,7 +292,7 @@ phy_all <- read.tree("../data/dated.auk.tre")
 diag_tab <- do.call(rbind, lapply(vars, function(v) {
   x <- dd[[v]]
   p2 <- drop.tip(phy_all, setdiff(phy_all$tip.label, dd$tip))
-  if (!is.ultrametric(p2)) p2 <- phytools::force.ultrametric(p2, method = "extend")
+  if (!is.ultrametric(p2)) p2 <- extend_ultrametric(p2)
   xx <- setNames(as.numeric(scale(x)), dd$tip)[p2$tip.label]
   lam <- tryCatch(phytools::phylosig(p2, xx, method = "lambda")$lambda,
                   error = function(e) NA_real_)
@@ -309,13 +326,13 @@ if (any(diag_tab$flag == "SKEWED")) {
 
 # Standardise so that the covariance matrices are correlations and the priors are sane.
 for (v in setdiff(vars, binary_vars)) dd[[v]] <- as.numeric(scale(dd[[v]]))
-dd$busco <- as.numeric(scale(dd$busco))
+for (v in FIXED) dd[[v]] <- as.numeric(scale(dd[[v]]))
 
 phy <- drop.tip(phy, setdiff(phy$tip.label, dd$tip))
 # The dated tree fails is.ultrametric by rounding only. Left as is, the phylogenetic
 # covariance is poorly conditioned and sampling stalls, so the rounding is absorbed here.
 if (!is.ultrametric(phy)) {
-  phy <- phytools::force.ultrametric(phy, method = "extend")
+  phy <- extend_ultrametric(phy)
   message("tree coerced to ultrametric (rounding only)")
 }
 A <- vcv.phylo(phy, corr = TRUE)
@@ -334,7 +351,8 @@ stopifnot(identical(dd$phylo, rownames(A)))
 # covariance. The split between the two is the whole point of the method.
 
 bf_list <- lapply(vars, function(v) {
-  bf(as.formula(paste0(v, " ~ busco + (1|p|gr(phylo, cov = A))")),
+  bf(as.formula(paste0(v, " ~ ", paste(FIXED, collapse = " + "),
+                       " + (1|p|gr(phylo, cov = A))")),
      family = if (v %in% binary_vars) bernoulli() else gaussian())
 })
 form <- Reduce(`+`, bf_list) + set_rescor(RESCOR)
@@ -345,7 +363,9 @@ form <- Reduce(`+`, bf_list) + set_rescor(RESCOR)
 resp_nm <- gsub("[^A-Za-z0-9]", "", vars)
 bin_nm  <- gsub("[^A-Za-z0-9]", "", binary_vars)
 gau_nm  <- setdiff(resp_nm, bin_nm)
-pr <- c(
+# Empty blocks (no binary response) are dropped before combining: with a NULL first,
+# c() returns a list rather than a brmsprior under brms 2.22.
+pr <- do.call(c, Filter(Negate(is.null), list(
   # A Bernoulli response lives on the logit scale, where an effect of two is ordinary and
   # the phylogenetic sd competes with a logistic error of variance pi^2 / 3. Both of its
   # priors are therefore wider than the standardised Gaussian ones.
@@ -358,7 +378,8 @@ pr <- c(
   # is where the chains failed to mix (Rhat 1.99 on a short run).
   do.call(c, lapply(gau_nm, function(r) prior_string("student_t(3, 0, 1)", class = "sd", resp = r))),
   prior(lkj(2), class = "cor"),
-  if (RESCOR) prior(lkj(2), class = "rescor") else NULL)
+  if (RESCOR) prior(lkj(2), class = "rescor") else NULL)))
+stopifnot(inherits(pr, "brmsprior"))
 
 cat("\nfitting", length(vars), "responses on", nrow(dd), "taxa |",
     if (RESCOR) "WITH residual correlation" else "no residual correlation",
@@ -418,6 +439,13 @@ if (nrow(cr)) print(format(cr, digits = 2), row.names = FALSE) else cat("  none\
 #
 # ln(omega) = ln(dN) - ln(dS), so the omega effect of any predictor is the difference of
 # its dN and dS effects, taken draw by draw so that the uncertainty is correct.
+
+if (COVAR == "gen") {
+  cat("\nGeneration length effects (standardised, posterior mean and 95% CrI):\n")
+  for (k in grep("^b_.*_ln_gen$", names(dr), value = TRUE))
+    cat(sprintf("  %-28s %6.3f [%6.3f, %6.3f]\n", k, mean(dr[[k]]),
+                quantile(dr[[k]], .025), quantile(dr[[k]], .975)))
+}
 
 b_dn <- dr[["b_lndn_busco"]]; b_ds <- dr[["b_lnds_busco"]]
 if (!is.null(b_dn) && !is.null(b_ds)) {

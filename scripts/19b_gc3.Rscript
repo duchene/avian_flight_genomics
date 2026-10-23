@@ -1,0 +1,61 @@
+# 19b_gc3.Rscript
+#
+# GC content at third codon positions (GC3) for every gene and taxon, and its sister-pair
+# ratios, so that GC3 can be screened gene by gene exactly as the rates are (script 20b and
+# the genome-wide excess of Figure 3).
+#
+# GC3 is the fraction of G and C among the A, C, G and T bases at third positions of the
+# codon alignment, with gaps, ambiguity codes and frameshift marks ignored, and is left
+# missing where fewer than 30 third positions are called. Third positions are the most
+# sensitive to GC-biased gene conversion, which can also raise dS.
+#
+# The pair ratios are written in the format of dnds_sisdifs_vol.Rdata: one row per gene and
+# pair, with moldiff = GC3 of sp1 / GC3 of sp2 and the same comparison labels and sp1, sp2
+# assignment, so that the downstream scripts orient them against the trait table exactly as
+# they orient the rates.
+#
+# Requires: none beyond base R
+# In:  codon alignments (AUK_ALIGNMENTS), ../data/dnds_sisdifs_vol.Rdata
+# Out: ../output/gc3_per_gene.csv.gz, ../output/gc3_sisdifs.Rdata (object sisdifgggc3)
+
+MIN_N3 <- 30
+ALN <- Sys.getenv("AUK_ALIGNMENTS", "../hpc/alignments")
+files <- list.files(ALN, pattern = "[.]fasta$", full.names = TRUE)
+cat("alignments:", length(files), "\n")
+
+gc3_of <- function(f) {
+  x <- readLines(f, warn = FALSE)
+  h <- grep("^>", x)
+  seqs <- vapply(seq_along(h), function(k) {
+    end <- if (k < length(h)) h[k + 1] - 1 else length(x)
+    paste(x[(h[k] + 1):end], collapse = "")
+  }, "")
+  third <- vapply(strsplit(toupper(seqs), ""), function(s)
+    paste(s[seq(3, length(s), by = 3)], collapse = ""), "")
+  gc <- nchar(gsub("[^GC]", "", third)); at <- nchar(gsub("[^AT]", "", third))
+  n3 <- gc + at
+  data.frame(locus = sub("[.]fasta$", "", basename(f)), code = sub("^>", "", x[h]),
+             gc3 = ifelse(n3 >= MIN_N3, gc / n3, NA_real_), n3 = n3)
+}
+g3 <- do.call(rbind, lapply(files, gc3_of))
+write.csv(g3, gzfile("../output/gc3_per_gene.csv.gz"), row.names = FALSE)
+cat("genes:", length(unique(g3$locus)), " taxon-gene values:", sum(!is.na(g3$gc3)),
+    " median GC3:", round(median(g3$gc3, na.rm = TRUE), 3), "\n")
+
+# sister ratios, in the format of dnds_sisdifs_vol.Rdata
+load("../data/dnds_sisdifs_vol.Rdata")
+pr <- unique(sisdifggds[, c("comparison", "sp1", "sp2", "comptype")])
+pr$comparison <- as.character(pr$comparison)
+key <- paste(g3$locus, g3$code)
+v <- setNames(g3$gc3, key)
+sisdifgggc3 <- do.call(rbind, lapply(seq_len(nrow(pr)), function(i) {
+  loci <- unique(g3$locus)
+  data.frame(locus = loci, comparison = pr$comparison[i],
+             moldiff = unname(v[paste(loci, pr$sp1[i])] / v[paste(loci, pr$sp2[i])]),
+             sp1 = pr$sp1[i], sp2 = pr$sp2[i], moldat = "gc3", comptype = pr$comptype[i],
+             stringsAsFactors = FALSE)
+}))
+sisdifgggc3$comparison <- factor(sisdifgggc3$comparison)
+save(sisdifgggc3, file = "../output/gc3_sisdifs.Rdata")
+cat("pair ratios:", sum(is.finite(sisdifgggc3$moldiff)), "across",
+    length(unique(sisdifgggc3$comparison)), "pairs\n")

@@ -46,6 +46,9 @@
 # lesser-flight sister: in 7 of 42 pairs the AviList reordering put them the other way.
 # Every contrast is oriented against the trait table, never by position.
 #
+# GC3=TRUE screens GC at third codon positions instead of the rates, from the sister ratios
+# of script 19b, and writes ../output/contrast_screen_gc3.csv without the figure.
+#
 # Requires: none beyond base R
 # In:  ../output/traits_contrasts.csv, ../output/traits_per_taxon.csv,
 #      ../data/dnds_sisdifs_vol.Rdata
@@ -117,10 +120,16 @@ screen_rate <- function(d, rate_label) {
   }))
 }
 
+GC3 <- Sys.getenv("GC3", "FALSE") == "TRUE"
 cat("screening\n")
-res <- rbind(screen_rate(sisdifggds,   "dS"),
-             screen_rate(sisdifggdn,   "dN"),
-             screen_rate(sisdifggdnds, "omega"))
+if (GC3) {
+  load("../output/gc3_sisdifs.Rdata")
+  res <- screen_rate(sisdifgggc3, "gc3")
+} else {
+  res <- rbind(screen_rate(sisdifggds,   "dS"),
+               screen_rate(sisdifggdn,   "dN"),
+               screen_rate(sisdifggdnds, "omega"))
+}
 
 # false-discovery control within each rate-by-phenotype screen
 res$q <- NA_real_
@@ -128,7 +137,7 @@ for (k in unique(paste(res$rate, res$phenotype))) {
   i <- paste(res$rate, res$phenotype) == k
   res$q[i] <- p.adjust(res$p[i], method = "BH")
 }
-write.csv(res, "../output/contrast_screen.csv", row.names = FALSE)
+write.csv(res, paste0("../output/contrast_screen", if (GC3) "_gc3", ".csv"), row.names = FALSE)
 
 
 # ---- 2. Calibration, which is the point of doing it this way ----
@@ -184,6 +193,8 @@ cat(strrep("=", 70), "\n")
 
 
 # ---- 3. Figure ----
+
+if (GC3) quit(save = "no")
 
 pdf("../figures/FigS3_contrast_screen.pdf", width = 10, height = 6.5)
 par(mfrow = c(3, 3), mar = c(4, 4.2, 2.6, 1), tcl = -0.25, mgp = c(2.4, 0.5, 0),

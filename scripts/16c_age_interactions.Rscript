@@ -34,6 +34,11 @@
 # cross-validation on the joint likelihood. Script 16 chose not to model the variance
 # before fitting, so the constant-variance fits are kept as its direct counterpart.
 #
+# SENSITIVITIES. SENS=gen replaces the mass contrast by the contrast in ln generation length
+# in every model that includes mass, and
+# SENS=gc adds the contrast in ln genome GC content as a fourth response, as in script 16.
+# Outputs then carry the suffix _gen or _gc.
+#
 # Requires: brms, posterior, loo (rstan backend)
 # In:  ../output/rate_contrasts.csv (script 16)
 # Out: ../output/age_interaction_posteriors.csv, ../output/age_interaction_sigma.csv,
@@ -46,7 +51,14 @@ suppressPackageStartupMessages({
   library(loo)
 })
 
+SENS <- Sys.getenv("SENS", "")
+SUF  <- if (nzchar(SENS)) paste0("_", SENS) else ""
 dat <- read.csv("../output/rate_contrasts.csv", stringsAsFactors = FALSE)
+if (nzchar(SENS)) {   # the two sensitivity variables come from the trait table of script 14
+  tc <- read.csv("../output/traits_contrasts.csv", stringsAsFactors = FALSE)
+  dat$d_loggen <- tc$d_loggen[match(dat$pair_id, tc$pair_id)]
+  dat$med_logratio_gc <- tc$d_lngc[match(dat$pair_id, tc$pair_id)]
+}
 stopifnot(nrow(dat) == 42)
 
 CHAINS <- 4; ITER <- 4000; WARMUP <- 2000; SEED <- 2026
@@ -57,6 +69,8 @@ CORES  <- min(CHAINS, parallel::detectCores())
 
 RESP <- c(ds = "med_logratio_ds", dn = "med_logratio_dn", w = "med_logratio_w")
 CONT <- c("d_loading", "age", "d_logmass")
+if (SENS == "gc")  RESP <- c(RESP, gc = "med_logratio_gc")
+if (SENS == "gen") CONT <- c(CONT, "d_loggen")
 BIN  <- c("migration_pair", "flight_loss_pair")
 
 y_mean <- sapply(RESP, function(v) mean(dat[[v]]))
@@ -81,6 +95,7 @@ DIV <- c(d_loading = x_div[["d_loading"]], age = x_div[["age"]],
          d_logmass = x_div[["d_logmass"]], migration_pair = 1, flight_loss_pair = 1,
          age_x_mig = x_div[["age"]], age_x_loss = x_div[["age"]],
          age_x_load = x_div[["age"]] * x_div[["d_loading"]])
+if (SENS == "gen") DIV <- c(DIV, d_loggen = x_div[["d_loggen"]])
 
 dat$overlap <- dat$migration_pair == 1 & dat$habit != "to migratory"
 sets <- list(
@@ -96,7 +111,7 @@ stopifnot(sapply(sets, nrow) == c(42, 36, 30, 41))
 terms_for <- function(d, mass) {
   tm <- c("d_loading", "migration_pair", "flight_loss_pair", "age",
           "age_x_mig", "age_x_loss", "age_x_load")
-  if (mass) tm <- c(tm, "d_logmass")
+  if (mass) tm <- c(tm, if (SENS == "gen") "d_loggen" else "d_logmass")
   tm[sapply(tm, function(v) length(unique(d[[v]])) > 1)]
 }
 
@@ -189,11 +204,11 @@ cmp <- do.call(rbind, lapply(names(sets), function(s) do.call(rbind, lapply(c(""
                max_pareto_k = max(c(a$diagnostics$pareto_k, b$diagnostics$pareto_k)),
                row.names = NULL)
   }))))
-write.csv(post, "../output/age_interaction_posteriors.csv", row.names = FALSE)
-write.csv(sig,  "../output/age_interaction_sigma.csv", row.names = FALSE)
-write.csv(diag, "../output/age_interaction_diagnostics.csv", row.names = FALSE)
-write.csv(cmp,  "../output/age_interaction_loo.csv", row.names = FALSE)
-saveRDS(fits, "../output/age_interaction_fits.rds")
+write.csv(post, paste0("../output/age_interaction_posteriors", SUF, ".csv"), row.names = FALSE)
+write.csv(sig,  paste0("../output/age_interaction_sigma", SUF, ".csv"), row.names = FALSE)
+write.csv(diag, paste0("../output/age_interaction_diagnostics", SUF, ".csv"), row.names = FALSE)
+write.csv(cmp,  paste0("../output/age_interaction_loo", SUF, ".csv"), row.names = FALSE)
+saveRDS(fits, paste0("../output/age_interaction_fits", SUF, ".rds"))
 
 
 # ---- 3. Fitted contrast against age, for the figure ----
@@ -222,7 +237,7 @@ lines <- do.call(rbind, lapply(c(all = "all_hom", drop_overlap = "drop_overlap_h
       }))
     }))
   }))
-write.csv(lines, "../output/age_interaction_lines.csv", row.names = FALSE)
+write.csv(lines, paste0("../output/age_interaction_lines", SUF, ".csv"), row.names = FALSE)
 
 
 # ---- 4. Report ----

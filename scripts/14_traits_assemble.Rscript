@@ -8,8 +8,9 @@
 #
 # All logarithms are natural, matching masdif in genome_flight_age_mass_data.Rdata.
 #
-# Requires: readxl, ape
+# Requires: readxl, ape, phytools
 # In:  ../data/Table_S1.xlsx (sheet "Table S2. Morphometrics")
+#      ../data/generation_length.csv (13b_generation_length)
 #      ../data/taxonomy_codes.csv
 #      ../data/taxon_comparisons_fless_flying.csv
 #      ../data/dated.auk.tre
@@ -109,7 +110,8 @@ dat$migratory   <- as.integer(grepl("^migr", dat$migration))
 
 feng <- read.csv("../data/Feng_Table_1.csv", header = T, check.names = FALSE,
                  stringsAsFactors = FALSE)
-feng$tip <- gsub(" ", "_", feng[["Latin name"]])
+# Feng carries four trinomials, so match on the first two words only
+feng$tip <- sub("^([^_]+_[^_]+).*$", "\\1", gsub(" ", "_", feng[["Latin name"]]))
 feng$tip[feng$tip == "Nannopterum_harrisi"] <- "Phalacrocorax_harrisi"
 dat$gc_mean <- as.numeric(feng[["CG content(%)"]][match(dat$tip, feng$tip)])
 
@@ -134,6 +136,36 @@ if (dir.exists(aln_dir)) {
 }
 
 
+# ---- 4b. Generation length, and imputation for the great auk ----
+#
+# Generation length from Bird et al. (2020), extracted by 13b_generation_length. The great
+# auk's published value is a family-level extrapolation, and its genome is reads mapped to
+# the razorbill, so it has no assembly GC content. Both are imputed with
+# phytools::phylo.impute under multivariate Brownian motion on the dated tree, jointly
+# with ln body mass, which is known for every taxon.
+
+gl <- read.csv("../data/generation_length.csv", stringsAsFactors = FALSE)
+dat$gen_years <- gl$gen_bird2020[match(dat$code, gl$code)]
+dat$gen_years[dat$code == "PINIMP"] <- NA
+dat$gen_source <- ifelse(is.na(dat$gen_years), "imputed", "Bird et al. 2020")
+dat$gc_source  <- ifelse(is.na(dat$gc_mean), "imputed", "Feng et al. 2020")
+X <- cbind(ln_mass = log(dat$mass_g), ln_gen = log(dat$gen_years), gc = dat$gc_mean)
+rownames(X) <- dat$tip
+phy <- keep.tip(read.tree("../data/dated.auk.tre"), dat$tip)
+stopifnot(setequal(phy$tip.label, dat$tip))
+# Starting values are the column means: phytools 2.5.2 fails to build its own ("ace") when
+# a column has a single missing value, as here, by not pruning the tree before fastAnc.
+X <- X[phy$tip.label, ]
+x0 <- colMeans(X, na.rm = TRUE)[which(is.na(X), arr.ind = TRUE)[, 2]]
+imp <- phytools::phylo.impute(phy, X, x.init = x0)
+dat$gen_years <- ifelse(is.na(dat$gen_years), exp(imp[dat$tip, "ln_gen"]), dat$gen_years)
+dat$gc_mean   <- ifelse(is.na(dat$gc_mean), imp[dat$tip, "gc"], dat$gc_mean)
+cat("imputed:", paste(dat$code[dat$gen_source == "imputed"], "generation length",
+                      round(dat$gen_years[dat$gen_source == "imputed"], 2)),
+    paste(dat$code[dat$gc_source == "imputed"], "GC",
+          round(dat$gc_mean[dat$gc_source == "imputed"], 2)), "\n")
+
+
 # ---- 5. Pair-level contrasts ----
 #
 # The contrast is the greater-flight-capacity sister minus the lesser one, matching the
@@ -155,6 +187,8 @@ contr <- do.call(rbind, lapply(sp, function(d) {
     d_hwi     = hi$hwi           - lo$hwi,
     d_logmass = log(hi$mass_g)   - log(lo$mass_g),
     d_gc_mean = hi$gc_mean       - lo$gc_mean,
+    d_lngc    = log(hi$gc_mean)  - log(lo$gc_mean),
+    d_loggen  = log(hi$gen_years) - log(lo$gen_years),
     flight_loss_pair = as.integer(any(d$flight_loss == 1)),
     migration_pair   = as.integer(hi$migratory == 1 & lo$migratory == 0),
     stringsAsFactors = FALSE

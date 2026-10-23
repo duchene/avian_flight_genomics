@@ -60,6 +60,12 @@
 # sisters the other way round. Every contrast below is therefore oriented explicitly
 # against the trait table, never by position.
 #
+# SENSITIVITIES. SENS=gen replaces the mass contrast by the contrast in ln generation
+# length (Bird et al. 2020, script 14) in every model that includes mass, since the two
+# contrasts correlate at r = 0.82. SENS=gc adds the contrast in ln genome GC content as a fourth
+# response, treated as another rate variable. Outputs then carry the suffix _gen or _gc,
+# and the figure is drawn only for the primary analysis.
+#
 # Requires: brms, posterior (rstan backend)
 # In:  ../output/traits_contrasts.csv, ../output/traits_per_taxon.csv,
 #      ../data/dnds_sisdifs_vol.Rdata
@@ -79,6 +85,10 @@ load("../data/dnds_sisdifs_vol.Rdata")
 
 dir.create("../output", showWarnings = FALSE)
 dir.create("../figures", showWarnings = FALSE)
+
+SENS <- Sys.getenv("SENS", "")
+SUF  <- if (nzchar(SENS)) paste0("_", SENS) else ""
+stopifnot(SENS %in% c("", "gen", "gc"))
 
 CHAINS <- 4; ITER <- 4000; WARMUP <- 2000; SEED <- 2026
 CORES  <- min(CHAINS, parallel::detectCores())
@@ -128,14 +138,17 @@ rates <- Reduce(function(a, b) merge(a, b, by = "comparison"),
 rates$pair_id <- unname(pair_of[as.character(rates$comparison)])
 dat <- merge(contr, rates, by = "pair_id")
 stopifnot(nrow(dat) == 42)
+dat$med_logratio_gc <- dat$d_lngc   # genome-wide GC, one value per pair
 
-write.csv(dat, "../output/rate_contrasts.csv", row.names = FALSE)
+write.csv(dat, paste0("../output/rate_contrasts", SUF, ".csv"), row.names = FALSE)
 
 
 # ---- 3. Scaling ----
 
 RESP  <- c(ds = "med_logratio_ds", dn = "med_logratio_dn", w = "med_logratio_w")
 CONT  <- c("d_loading", "age", "d_logmass")
+if (SENS == "gc")  RESP <- c(RESP, gc = "med_logratio_gc")
+if (SENS == "gen") CONT <- c(CONT, "d_loggen")
 BIN   <- c("migration_pair", "flight_loss_pair")
 
 y_mean <- sapply(RESP, function(v) mean(dat[[v]]))
@@ -172,7 +185,7 @@ PRIORS <- c(prior(normal(0, 1), class = "b"),
 
 terms_for <- function(d, mass) {
   tm <- c("d_loading", "migration_pair", "flight_loss_pair", "age")
-  if (mass) tm <- c(tm, "d_logmass")
+  if (mass) tm <- c(tm, if (SENS == "gen") "d_loggen" else "d_logmass")
   # a term that does not vary in the subset cannot be estimated
   tm[sapply(tm, function(v) length(unique(d[[v]])) > 1)]
 }
@@ -250,13 +263,15 @@ for (s in names(sets)) for (mass in c(FALSE, TRUE)) {
   lab <- paste0(s, if (mass) "_mass" else "")
   cat("==== fitting", lab, "(n =", nrow(d), ") :", paste(tm, collapse = " + "), "\n")
 
-  fit <- fit_mv(d, c("ds", "dn", "w"), tm)
+  fit <- fit_mv(d, names(RESP), tm)
   dg  <- diagnose(fit)
-  ra  <- resid_age(fit, sets[[s]], c("ds", "dn", "w"))
+  ra  <- resid_age(fit, sets[[s]], names(RESP))
+  ALT <- setdiff(names(RESP), "dn")
+  ra_na <- as.list(setNames(rep(NA, length(RESP)), paste0("resid_age_", names(RESP))))
 
   if (passes(dg)) {
     model <- "trivariate"
-    draws <- coef_draws(fit, c("ds", "dn", "w"), tm)
+    draws <- coef_draws(fit, names(RESP), tm)
     resc[[lab]] <- summarise_rescor(fit, s, mass, model)
     fits[[lab]] <- fit
     diag[[lab]] <- data.frame(set = s, mass = mass, model = model, fit = "ds_dn_w",
@@ -265,8 +280,8 @@ for (s in names(sets)) for (mass in c(FALSE, TRUE)) {
     cat("  trivariate fit fails the convergence criteria, refitting as two bivariate fits\n")
     print(dg)
     model <- "bivariate"
-    f1 <- fit_mv(d, c("ds", "w"), tm); f2 <- fit_mv(d, c("dn", "w"), tm)
-    draws <- c(coef_draws(f1, c("ds", "w"), tm), coef_draws(f2, "dn", tm))
+    f1 <- fit_mv(d, ALT, tm); f2 <- fit_mv(d, c("dn", "w"), tm)
+    draws <- c(coef_draws(f1, ALT, tm), coef_draws(f2, "dn", tm))
     resc[[lab]] <- rbind(summarise_rescor(f1, s, mass, model),
                          summarise_rescor(f2, s, mass, model))
     fits[[lab]] <- list(ds_w = f1, dn_w = f2)
@@ -274,18 +289,18 @@ for (s in names(sets)) for (mass in c(FALSE, TRUE)) {
       data.frame(set = s, mass = mass, model = "trivariate (rejected)", fit = "ds_dn_w",
                  n = nrow(d), dg, t(setNames(ra, paste0("resid_age_", names(ra))))),
       data.frame(set = s, mass = mass, model = model, fit = "ds_w", n = nrow(d),
-                 diagnose(f1), resid_age_ds = NA, resid_age_dn = NA, resid_age_w = NA),
+                 diagnose(f1), ra_na),
       data.frame(set = s, mass = mass, model = model, fit = "dn_w", n = nrow(d),
-                 diagnose(f2), resid_age_ds = NA, resid_age_dn = NA, resid_age_w = NA))
+                 diagnose(f2), ra_na))
   }
   post[[lab]] <- summarise_coef(draws, s, mass, model)
 }
 
 post <- do.call(rbind, post); resc <- do.call(rbind, resc); diag <- do.call(rbind, diag)
-write.csv(post, "../output/rate_contrast_posteriors.csv", row.names = FALSE)
-write.csv(resc, "../output/rate_contrast_rescor.csv", row.names = FALSE)
-write.csv(diag, "../output/rate_contrast_diagnostics.csv", row.names = FALSE)
-saveRDS(fits, "../output/rate_contrast_fits.rds")
+write.csv(post, paste0("../output/rate_contrast_posteriors", SUF, ".csv"), row.names = FALSE)
+write.csv(resc, paste0("../output/rate_contrast_rescor", SUF, ".csv"), row.names = FALSE)
+write.csv(diag, paste0("../output/rate_contrast_diagnostics", SUF, ".csv"), row.names = FALSE)
+saveRDS(fits, paste0("../output/rate_contrast_fits", SUF, ".rds"))
 
 cat("\nConvergence:\n\n"); print(format(diag, digits = 3), row.names = FALSE)
 show <- function(tm, title) {
@@ -298,6 +313,7 @@ show("migration_pair", "Gain of migration")
 show("flight_loss_pair", "Flight loss")
 show("age", "Pair age")
 show("d_logmass", "Body mass")
+if (SENS == "gen") show("d_loggen", "Generation length")
 cat("\nResidual correlations:\n\n"); print(format(resc, digits = 3), row.names = FALSE)
 
 
@@ -312,7 +328,7 @@ line <- do.call(rbind, lapply(c(FALSE, TRUE), function(mass) {
   lab <- paste0("all", if (mass) "_mass" else "")
   f <- fits[[lab]]
   tm <- terms_for(scaled(dat), mass)
-  do.call(rbind, lapply(c("ds", "dn", "w"), function(r) {
+  do.call(rbind, lapply(names(RESP), function(r) {
     fr <- if (inherits(f, "brmsfit")) f else if (r == "dn") f$dn_w else f$ds_w
     dr <- as_draws_df(fr)
     others <- setdiff(tm, "d_loading")
@@ -325,7 +341,8 @@ line <- do.call(rbind, lapply(c(FALSE, TRUE), function(mass) {
                estimate = q[, 1], lower = q[, 2], upper = q[, 3])
   }))
 }))
-write.csv(line, "../output/rate_contrast_loading_line.csv", row.names = FALSE)
+write.csv(line, paste0("../output/rate_contrast_loading_line", SUF, ".csv"), row.names = FALSE)
+if (nzchar(SENS)) quit(save = "no")
 
 
 # ---- 6. Figure ----
